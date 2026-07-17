@@ -62,12 +62,43 @@ func TestLoadSelectsImplementationOnlyAfterDesignApproval(t *testing.T) {
 	}
 }
 
-func TestLoadStopsAtApprovalStates(t *testing.T) {
-	for _, label := range []string{"state:design_ready", "state:implementation_ready", "state:implementation_approved"} {
-		runner := &fakeRunner{responses: []string{`{"number":8,"title":"waiting","labels":[{"name":"` + label + `"}]}`}}
-		if _, err := load(context.Background(), ".", 8, ".workspace", runner); err == nil {
-			t.Fatalf("label %s should not start another workflow", label)
+func TestLoadRestoresApprovalStates(t *testing.T) {
+	for _, test := range []struct {
+		label string
+		phase Phase
+	}{
+		{"state:design_ready", PhaseDesign},
+		{"state:implementation_ready", PhaseImplementation},
+	} {
+		runner := &fakeRunner{responses: []string{`{"number":8,"title":"waiting","labels":[{"name":"` + test.label + `"}]}`}}
+		workflow, err := load(context.Background(), ".", 8, ".workspace", runner)
+		if err != nil || !workflow.IsPending() || workflow.Phase != test.phase {
+			t.Fatalf("label %s: workflow=%+v err=%v", test.label, workflow, err)
 		}
+	}
+	runner := &fakeRunner{responses: []string{`{"number":8,"title":"waiting","labels":[{"name":"state:implementation_approved"}]}`}}
+	if _, err := load(context.Background(), ".", 8, ".workspace", runner); err == nil {
+		t.Fatal("completed workflow should not start another workflow")
+	}
+}
+
+func TestLoadRejectsClosedIssue(t *testing.T) {
+	runner := &fakeRunner{responses: []string{`{"number":9,"title":"closed","state":"CLOSED"}`}}
+	workflow, err := load(context.Background(), ".", 9, ".workspace", runner)
+	if err != nil || workflow.IsOpen() {
+		t.Fatalf("workflow=%+v err=%v", workflow, err)
+	}
+}
+
+func TestPendingResultReadsExpectedArtifact(t *testing.T) {
+	dir := t.TempDir()
+	workflow := &Workflow{dir: dir, workspaceName: ".workspace", pending: true, Phase: PhaseDesign, Issue: Issue{Number: 10, Title: "Waiting"}}
+	if _, err := workflow.SaveResult("saved result"); err != nil {
+		t.Fatal(err)
+	}
+	result, path, err := workflow.PendingResult()
+	if err != nil || result != "# Waiting\n\nsaved result" || !strings.HasSuffix(path, "10_waiting.md") {
+		t.Fatalf("result=%q path=%q err=%v", result, path, err)
 	}
 }
 

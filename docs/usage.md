@@ -65,7 +65,7 @@ git pull --ff-only
 
 fetchまたはfast-forward pullに失敗した場合は、そのAIジョブを開始せず`[job N] 失敗`を表示します。自動mergeやrebaseは行いません。競合、未追跡ブランチ、認証・ネットワークエラーなどの原因を解消してからジョブを再投入してください。
 
-起動直後に、GitHubから取得する情報として`issue`または`pr`を選択します。`issue`の場合は続けてIssue番号を入力します。koroconは`gh issue view --json`で本文・ラベル・コメントなどを取得し、Issueの状態から設計または実装を判定してCodexへ初期ジョブとして投入します。`pr`の場合は`gh pr list`でPR一覧を表示します。事前にGitHub CLI (`gh`) のログインを完了してください。
+起動直後に`取得する情報を選択してください (ISSUE/PR):`と表示します。`ISSUE`/`I`（大小文字非依存）または空入力でIssue番号を入力し、`PR`/`P`でPR一覧を取得します。旧形式の`1`/`2`も互換入力として受け付けます。不正入力は再入力となり、PRが0件の場合は選択画面へ戻ります。`gh issue view --json`のGitHub状態がOPENでないIssueも、状態を表示して選択画面へ戻ります。
 
 標準入力から実行する場合も、最初の行に`issue`または`pr`を指定します。
 
@@ -125,7 +125,7 @@ worktreeパスがすでに存在する場合は作成コマンドを実行せず
 
 ファイル名とMarkdownの整形はkorobokcleと同じです。タイトルは小文字化し、空白や`/`、`\\`、`:`, `#`, `.`, `,`, `(`, `)`を`-`へ置換します。成果物の先頭見出しは`# <Issueタイトル>`に統一します。
 
-起動時点ですでに`state:design_ready`または`state:implementation_ready`のIssueは、別セッションで完了した承認待ちとして自動実行しません。`state:implementation_approved`または`state:pr_created`のIssueも処理済みとして実行しません。
+起動時点ですでに`state:design_ready`または`state:implementation_ready`のOPEN Issueは、保存済み成果物を表示して承認待ちを再開します。別の初期AIジョブは開始しません。通常の承認フローと同じく、Enter、`承認`、`approve`、`a`などで承認し、それ以外は修正フィードバックとして同じ工程を再実行します。成果物が存在しない場合は不整合エラーとして処理を停止します。`state:implementation_approved`または`state:pr_created`のIssueは処理済みとして実行しません。
 
 Codexへ渡す内容は「設計または実装を行う」という工程指示と、Issue番号・タイトル・URL・作成者・本文・ラベル・コメントです。具体的な手順と成果物形式は対象リポジトリのスキルに委ねます。ラベル操作などのワークフロー制御はAIプロンプトへ含めず、korocon自身が実行します。
 

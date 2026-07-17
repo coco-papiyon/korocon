@@ -4,13 +4,62 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	issueworkflow "github.com/coco-papiyon/korocon/internal/issue"
 	"io"
+	"strings"
 	"testing"
 )
 
 type blockingReader struct {
 	started chan struct{}
 	release chan struct{}
+}
+
+func TestShowPullRequestsReportsEmptyJSONList(t *testing.T) {
+	old := runGitHubCommand
+	runGitHubCommand = func(context.Context, string, ...string) ([]byte, error) { return []byte("[]"), nil }
+	defer func() { runGitHubCommand = old }()
+	var out bytes.Buffer
+	hasPR, err := showPullRequests(context.Background(), &out, ".")
+	if err != nil || hasPR || out.Len() != 0 {
+		t.Fatalf("hasPR=%v err=%v output=%q", hasPR, err, out.String())
+	}
+}
+
+func TestSelectGitHubInformationAcceptsEmptyAsIssue(t *testing.T) {
+	old := loadIssueWorkflow
+	loadIssueWorkflow = func(_ context.Context, _ string, number int, workspace string) (*issueworkflow.Workflow, error) {
+		return &issueworkflow.Workflow{Issue: issueworkflow.Issue{Number: number, State: "OPEN"}, Phase: issueworkflow.PhaseDesign}, nil
+	}
+	defer func() { loadIssueWorkflow = old }()
+	var out bytes.Buffer
+	_, selected, err := selectGitHubInformation(context.Background(), bytes.NewBufferString("\n42\n"), &out, ".", ".workspace")
+	if err != nil || selected == nil || selected.Issue.Number != 42 {
+		t.Fatalf("selected=%+v err=%v output=%q", selected, err, out.String())
+	}
+	if !strings.Contains(out.String(), "取得する情報を選択してください (ISSUE/PR):") {
+		t.Fatalf("prompt missing: %q", out.String())
+	}
+}
+
+func TestSelectGitHubInformationRetriesAfterClosedIssue(t *testing.T) {
+	old := loadIssueWorkflow
+	loadIssueWorkflow = func(_ context.Context, _ string, number int, workspace string) (*issueworkflow.Workflow, error) {
+		state := "CLOSED"
+		if number == 2 {
+			state = "OPEN"
+		}
+		return &issueworkflow.Workflow{Issue: issueworkflow.Issue{Number: number, State: state}, Phase: issueworkflow.PhaseDesign}, nil
+	}
+	defer func() { loadIssueWorkflow = old }()
+	var out bytes.Buffer
+	_, selected, err := selectGitHubInformation(context.Background(), bytes.NewBufferString("issue\n1\nissue\n2\n"), &out, ".", ".workspace")
+	if err != nil || selected == nil || selected.Issue.Number != 2 {
+		t.Fatalf("selected=%+v err=%v output=%q", selected, err, out.String())
+	}
+	if !strings.Contains(out.String(), "Issue #1 は OPEN ではありません（CLOSED）。") {
+		t.Fatalf("closed issue message missing: %q", out.String())
+	}
 }
 
 func (r *blockingReader) Read([]byte) (int, error) {

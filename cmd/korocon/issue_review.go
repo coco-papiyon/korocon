@@ -49,6 +49,20 @@ func newIssueReviewController(workflow reviewWorkflow, phase issueworkflow.Phase
 	return c
 }
 
+// SetPendingResult restores a saved artifact for startup approval without
+// registering or launching an initial AI job.
+func (c *issueReviewController) SetPendingResult(result, path string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pending = true
+	c.result = result
+	phase, _ := c.phaseNames()
+	_, err := fmt.Fprintf(c.out,
+		"\n\n---\n\n承認待ちの%s結果です。\n\n%s\n成果物: %s\n%sが完了しました。承認する場合はEnter、承認、approve、aを入力してください。\n修正する場合は内容を入力してください。\n",
+		phase, strings.TrimSpace(result), path, phase)
+	return err
+}
+
 func (c *issueReviewController) InitialJob() *daemon.JobSpec {
 	if c.phase != issueworkflow.PhaseImplementation || c.implementationJob == nil {
 		return nil

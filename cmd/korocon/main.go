@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -116,7 +117,15 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 			}
 		}
 		review = newIssueReviewController(selectedIssue, selectedIssue.Phase, stderr, implementationJob, implementationEngine.Close)
-		if selectedIssue.Phase == issueworkflow.PhaseImplementation {
+		if selectedIssue.IsPending() {
+			result, path, pendingErr := selectedIssue.PendingResult()
+			if pendingErr != nil {
+				return pendingErr
+			}
+			if err := review.SetPendingResult(result, path); err != nil {
+				return err
+			}
+		} else if selectedIssue.Phase == issueworkflow.PhaseImplementation {
 			initialJob = review.InitialJob()
 		} else {
 			initialPrompt = review.InitialPrompt()
@@ -159,7 +168,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 func selectGitHubInformation(ctx context.Context, in io.Reader, out io.Writer, workingDir, workspaceName string) (io.Reader, *issueworkflow.Workflow, error) {
 	reader := bufio.NewReader(in)
 	for {
-		if _, err := fmt.Fprint(out, "取得する情報を選択してください (issue/pr): "); err != nil {
+		if _, err := fmt.Fprint(out, "取得する情報を選択してください (ISSUE/PR): "); err != nil {
 			return nil, nil, err
 		}
 		choice, err := readStringContext(ctx, reader)
@@ -167,19 +176,29 @@ func selectGitHubInformation(ctx context.Context, in io.Reader, out io.Writer, w
 			return nil, nil, fmt.Errorf("GitHub情報の選択を読み取れません: %w", err)
 		}
 		switch strings.ToLower(strings.TrimSpace(choice)) {
-		case "1", "issue", "i":
-			selected, err := selectIssue(ctx, reader, out, workingDir, workspaceName)
+		case "", "1", "issue", "i":
+			selected, retry, err := selectIssue(ctx, reader, out, workingDir, workspaceName)
 			if err != nil {
 				return nil, nil, err
 			}
+			if retry {
+				continue
+			}
 			return remainingInput(in, reader), selected, nil
 		case "2", "pr", "p":
-			if err := showPullRequests(ctx, out, workingDir); err != nil {
+			hasPR, err := showPullRequests(ctx, out, workingDir)
+			if err != nil {
 				return nil, nil, err
+			}
+			if !hasPR {
+				if _, err := fmt.Fprintln(out, "Pull Requestがありません。"); err != nil {
+					return nil, nil, err
+				}
+				continue
 			}
 			return remainingInput(in, reader), nil, nil
 		default:
-			if _, writeErr := fmt.Fprintln(out, "issue または pr を入力してください。"); writeErr != nil {
+			if _, writeErr := fmt.Fprintln(out, "ISSUE または PR を入力してください。"); writeErr != nil {
 				return nil, nil, writeErr
 			}
 		}
@@ -193,31 +212,43 @@ func remainingInput(original io.Reader, buffered *bufio.Reader) io.Reader {
 	return buffered
 }
 
-func selectIssue(ctx context.Context, reader *bufio.Reader, out io.Writer, workingDir, workspaceName string) (*issueworkflow.Workflow, error) {
+func selectIssue(ctx context.Context, reader *bufio.Reader, out io.Writer, workingDir, workspaceName string) (*issueworkflow.Workflow, bool, error) {
 	if _, err := fmt.Fprint(out, "issue番号を入力してください: "); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	numberText, err := readStringContext(ctx, reader)
 	if err != nil && len(numberText) == 0 {
-		return nil, fmt.Errorf("issue番号を読み取れません: %w", err)
+		return nil, false, fmt.Errorf("issue番号を読み取れません: %w", err)
 	}
 	numberText = strings.TrimSpace(numberText)
 	number, err := strconv.Atoi(numberText)
 	if err != nil || number < 1 {
-		return nil, fmt.Errorf("issue番号が不正です: %q", numberText)
+		return nil, false, fmt.Errorf("issue番号が不正です: %q", numberText)
 	}
-	selected, err := issueworkflow.Load(ctx, workingDir, number, workspaceName)
+	selected, err := loadIssueWorkflow(ctx, workingDir, number, workspaceName)
 	if err != nil {
-		return nil, fmt.Errorf("issue #%dの取得に失敗しました: %w", number, err)
+		return nil, false, fmt.Errorf("issue #%dの取得に失敗しました: %w", number, err)
+	}
+	if !selected.IsOpen() {
+		if _, err := fmt.Fprintf(out, "Issue #%d は OPEN ではありません（%s）。\n", number, strings.ToUpper(strings.TrimSpace(selected.Issue.State))); err != nil {
+			return nil, false, err
+		}
+		return nil, true, nil
 	}
 	phaseName := "設計"
 	if selected.Phase == issueworkflow.PhaseImplementation {
 		phaseName = "実装"
 	}
 	if _, err := fmt.Fprintf(out, "\n%s\n\n実行工程: %s\n", selected.Context(), phaseName); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return selected, nil
+	if selected.IsPending() {
+		_, _, err := selected.PendingResult()
+		if err != nil {
+			return nil, false, fmt.Errorf("issue #%dの承認待ち状態と成果物が不整合です: %w", number, err)
+		}
+	}
+	return selected, false, nil
 }
 
 type readStringResult struct {
@@ -241,21 +272,36 @@ func readStringContext(ctx context.Context, reader *bufio.Reader) (string, error
 	}
 }
 
-func showPullRequests(ctx context.Context, out io.Writer, workingDir string) error {
-	return showGitHubCommand(ctx, out, workingDir, "pr", "list")
-}
-
-func showGitHubCommand(ctx context.Context, out io.Writer, workingDir string, args ...string) error {
+var runGitHubCommand = func(ctx context.Context, workingDir string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	if workingDir != "" {
 		cmd.Dir = workingDir
 	}
-	cmd.Stdout = out
-	cmd.Stderr = out
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("GitHub情報の取得に失敗しました (gh %s): %w", strings.Join(args, " "), err)
+	return cmd.CombinedOutput()
+}
+
+var loadIssueWorkflow = issueworkflow.Load
+
+func showPullRequests(ctx context.Context, out io.Writer, workingDir string) (bool, error) {
+	raw, err := runGitHubCommand(ctx, workingDir, "pr", "list", "--json", "number,title,state,url")
+	if err != nil {
+		return false, fmt.Errorf("GitHub情報の取得に失敗しました (gh pr list): %w", err)
 	}
-	return nil
+	var prs []struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+		State  string `json:"state"`
+		URL    string `json:"url"`
+	}
+	if err := json.Unmarshal(raw, &prs); err != nil {
+		return false, fmt.Errorf("Pull Request一覧の解析に失敗しました: %w", err)
+	}
+	for _, pr := range prs {
+		if _, err := fmt.Fprintf(out, "#%d %s (%s) %s\n", pr.Number, pr.Title, pr.State, pr.URL); err != nil {
+			return false, err
+		}
+	}
+	return len(prs) > 0, nil
 }
 
 func runPrompt(args []string, stdout, stderr io.Writer) error {

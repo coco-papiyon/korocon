@@ -101,7 +101,9 @@ Codexからコマンド実行の承認要求を受信すると許可リストを
 
 ### `internal/issue`
 
-選択したIssueをGitHub CLIからJSONで取得し、状態ラベルから設計・実装を判定します。Codexへ渡すIssueコンテキストの生成と、ジョブ開始・完了時の状態ラベル同期を担当します。具体的な設計・実装手順は扱いません。
+選択したIssueをGitHub CLIからJSONで取得し、GitHubの`state`でOPEN判定を行ったうえで、状態ラベルから設計・実装を判定します。`state:design_ready`/`state:implementation_ready`は承認待ちとして保存済み成果物を読み込み、再開可能な状態を返します。Codexへ渡すIssueコンテキストの生成と、ジョブ開始・完了時の状態ラベル同期を担当します。具体的な設計・実装手順は扱いません。
+
+起動時の選択失敗、PRなし、OPENでないIssueは初期ジョブを投入せず、`cmd/korocon`の選択画面へ戻します。承認待ちの再開では成果物の存在を確認し、新規実行による上書きは行いません。
 
 ### `internal/implementation`
 

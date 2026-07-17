@@ -67,6 +67,7 @@ type Issue struct {
 	URL       string    `json:"url"`
 	Author    User      `json:"author"`
 	Assignees []User    `json:"assignees"`
+	State     string    `json:"state"`
 }
 
 type commandRunner interface {
@@ -103,6 +104,7 @@ type Workflow struct {
 	Issue                 Issue
 	Phase                 Phase
 	workspaceName         string
+	pending               bool
 	publishImplementation func(context.Context, string) (string, error)
 }
 
@@ -114,7 +116,7 @@ func load(ctx context.Context, workingDir string, number int, workspaceName stri
 	if number < 1 {
 		return nil, errors.New("issue number must be greater than zero")
 	}
-	raw, err := runner.Run(ctx, workingDir, "issue", "view", strconv.Itoa(number), "--json", "number,title,body,labels,comments,url,author,assignees")
+	raw, err := runner.Run(ctx, workingDir, "issue", "view", strconv.Itoa(number), "--json", "number,title,body,labels,comments,url,author,assignees,state")
 	if err != nil {
 		return nil, err
 	}
@@ -122,14 +124,17 @@ func load(ctx context.Context, workingDir string, number int, workspaceName stri
 	if err := json.Unmarshal(raw, &selected); err != nil {
 		return nil, fmt.Errorf("decode issue #%d: %w", number, err)
 	}
-	phase, err := classify(selected.Labels)
+	if strings.TrimSpace(selected.State) != "" && !strings.EqualFold(strings.TrimSpace(selected.State), "OPEN") {
+		return &Workflow{dir: workingDir, runner: runner, Issue: selected, workspaceName: workspaceName}, nil
+	}
+	phase, pending, err := classify(selected.Labels)
 	if err != nil {
 		return nil, err
 	}
-	return &Workflow{dir: workingDir, runner: runner, Issue: selected, Phase: phase, workspaceName: workspaceName}, nil
+	return &Workflow{dir: workingDir, runner: runner, Issue: selected, Phase: phase, pending: pending, workspaceName: workspaceName}, nil
 }
 
-func classify(labels []Label) (Phase, error) {
+func classify(labels []Label) (Phase, bool, error) {
 	has := func(target string) bool {
 		for _, label := range labels {
 			if strings.EqualFold(strings.TrimSpace(label.Name), target) {
@@ -140,16 +145,39 @@ func classify(labels []Label) (Phase, error) {
 	}
 	switch {
 	case has("state:implementation_ready"):
-		return "", errors.New("issueは実装完了の承認待ちです")
+		return PhaseImplementation, true, nil
 	case has("state:implementation_approved"), has("state:pr_created"):
-		return "", errors.New("issueの実装工程は完了しています")
+		return "", false, errors.New("issueの実装工程は完了しています")
 	case has(labelDesignReady):
-		return "", errors.New("issueは設計完了の承認待ちです")
+		return PhaseDesign, true, nil
 	case has(labelDesignApproved), has(labelImplementationRunning):
-		return PhaseImplementation, nil
+		return PhaseImplementation, false, nil
 	default:
-		return PhaseDesign, nil
+		return PhaseDesign, false, nil
 	}
+}
+
+func (w *Workflow) IsOpen() bool {
+	state := strings.TrimSpace(w.Issue.State)
+	return state == "" || strings.EqualFold(state, "OPEN")
+}
+
+func (w *Workflow) IsPending() bool { return w.pending }
+
+// PendingResult loads the saved artifact without starting a new AI job.
+func (w *Workflow) PendingResult() (string, string, error) {
+	if !w.pending {
+		return "", "", errors.New("issue is not awaiting approval")
+	}
+	path, err := w.artifactPath()
+	if err != nil {
+		return "", "", err
+	}
+	result, err := os.ReadFile(path)
+	if err != nil {
+		return "", path, fmt.Errorf("承認待ち成果物を読み込めません: %w", err)
+	}
+	return string(result), path, nil
 }
 
 func (w *Workflow) Prompt() string {
