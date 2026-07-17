@@ -188,6 +188,10 @@ func (e *Engine) ensureWorktree(ctx context.Context) (string, string, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", "", fmt.Errorf("inspect implementation worktree: %w", err)
 	}
+	prune := exec.CommandContext(ctx, "git", "-C", repositoryDir, "worktree", "prune")
+	if output, err := prune.CombinedOutput(); err != nil {
+		return "", "", fmt.Errorf("prune stale implementation worktrees: %w: %s", err, strings.TrimSpace(string(output)))
+	}
 	if err := os.MkdirAll(filepath.Dir(worktree), 0o755); err != nil {
 		return "", "", fmt.Errorf("create implementation directory: %w", err)
 	}

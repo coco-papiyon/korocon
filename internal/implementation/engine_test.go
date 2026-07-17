@@ -49,6 +49,44 @@ func TestEnsureWorktreeCreatesConfiguredBranch(t *testing.T) {
 	}
 }
 
+func TestEnsureWorktreePrunesRegistrationWhenDirectoryWasRemoved(t *testing.T) {
+	repository := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "test"},
+	} {
+		runGit(t, repository, args...)
+	}
+	if err := os.WriteFile(filepath.Join(repository, "README.md"), []byte("test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository, "add", "README.md")
+	runGit(t, repository, "commit", "-m", "initial")
+
+	engine := New(Config{RepositoryDir: repository, ImplementationDirectory: "../", BranchNamePattern: "issue_#<issue番号>", IssueNumber: 10})
+	path, _, err := engine.ensureWorktree(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatal(err)
+	}
+	path, branch, err := engine.ensureWorktree(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if branch != "issue_#10" {
+		t.Fatalf("branch = %q", branch)
+	}
+	if _, err := os.Stat(filepath.Join(path, ".git")); err != nil {
+		t.Fatalf("worktree was not recreated: %v", err)
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	command := append([]string{"-C", dir}, args...)
