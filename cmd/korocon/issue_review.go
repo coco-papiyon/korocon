@@ -18,7 +18,7 @@ type reviewWorkflow interface {
 	Start(context.Context) error
 	Finish(context.Context, error) error
 	SaveResult(string) (string, error)
-	Approve(context.Context, string) error
+	Approve(context.Context, string) (string, error)
 	SetPhase(issueworkflow.Phase)
 }
 
@@ -73,6 +73,7 @@ func (c *issueReviewController) OnJobStart(ctx context.Context, id uint64, promp
 	if err := c.workflow.Start(ctx); err != nil {
 		c.mu.Lock()
 		delete(c.jobs, id)
+		c.prompts[prompt]++
 		c.mu.Unlock()
 		return err
 	}
@@ -130,14 +131,19 @@ func (c *issueReviewController) HandleInput(ctx context.Context, input string) (
 	c.mu.Unlock()
 
 	if isApprovalInput(input) {
-		if err := c.workflow.Approve(ctx, result); err != nil {
-			return daemon.InputAction{Handled: true}, err
+		prURL, approveErr := c.workflow.Approve(ctx, result)
+		if approveErr != nil {
+			return daemon.InputAction{Handled: true}, approveErr
 		}
 		c.mu.Lock()
 		c.pending = false
 		c.result = ""
 		phase, _ := c.phaseNames()
-		_, err := fmt.Fprintf(c.out, "%sを承認しました。\n", phase)
+		message := fmt.Sprintf("%sを承認しました。\n", phase)
+		if c.phase == issueworkflow.PhaseImplementation && strings.TrimSpace(prURL) != "" {
+			message = fmt.Sprintf("実装を承認し、PRを作成しました: %s\n", strings.TrimSpace(prURL))
+		}
+		_, err := fmt.Fprint(c.out, message)
 		if c.phase == issueworkflow.PhaseDesign {
 			c.phase = issueworkflow.PhaseImplementation
 			c.workflow.SetPhase(issueworkflow.PhaseImplementation)

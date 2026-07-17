@@ -82,7 +82,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 	if binaryName == "" {
 		binaryName = *provider
 	}
-	fmt.Fprintf(stderr, "provider: %s\nmodel: %s\nbinary: %s\nconfig: %s\nworkspace: %s\nbranch: %s\nimplementation directory: %s\nimplementation loops: %d\nauto-approved commands: %d\nlog: %s\n", *provider, *model, binaryName, configPath, configured.WorkspaceName, configured.BranchNamePattern, configured.ImplementationDirectory, configured.ImplementationLoopCount, len(configured.BuiltinAllowedCommands), *logPath)
+	fmt.Fprintf(stderr, "provider: %s\nmodel: %s\nbinary: %s\nconfig: %s\nworkspace: %s\nbranch: %s\nbase branch: %s\nimplementation directory: %s\nimplementation loops: %d\nauto-approved commands: %d\nlog: %s\n", *provider, *model, binaryName, configPath, configured.WorkspaceName, configured.BranchNamePattern, configured.BaseBranch, configured.ImplementationDirectory, configured.ImplementationLoopCount, len(configured.BuiltinAllowedCommands), *logPath)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	startupInput, selectedIssue, err := selectGitHubInformation(ctx, in, stdout, *dir, configured.WorkspaceName)
@@ -101,9 +101,11 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 			Binary: *binary, RepositoryDir: *dir, WorkspaceName: configured.WorkspaceName,
 			ImplementationDirectory: configured.ImplementationDirectory,
 			BranchNamePattern:       configured.BranchNamePattern, LoopCount: configured.ImplementationLoopCount,
+			BaseBranch:  configured.BaseBranch,
 			IssueNumber: selectedIssue.Issue.Number, IssueTitle: selectedIssue.Issue.Title,
 			IssueContext: selectedIssue.Context(), LogOut: logFile, LogErr: logFile,
 		})
+		selectedIssue.SetImplementationPublisher(implementationEngine.Publish)
 		defer implementationEngine.Close()
 		implementationJob := func(prompt string) *daemon.JobSpec {
 			return &daemon.JobSpec{
@@ -135,6 +137,9 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 		}
 		configured = updated
 		return nil
+	}
+	cfg.BeforeJob = func(ctx context.Context, _ uint64, _ string) error {
+		return issueworkflow.SyncRepository(ctx, *dir)
 	}
 	if review != nil {
 		cfg.OnJobStart = review.OnJobStart

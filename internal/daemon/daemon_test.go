@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -56,6 +57,46 @@ func TestRunStartsJobsInBackground(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "-p first") || !strings.Contains(out.String(), "-p second") {
 		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestRunPreparesEveryJobBeforeStarting(t *testing.T) {
+	var out strings.Builder
+	var prepared []string
+	err := Run(context.Background(), strings.NewReader("first\nsecond\n"), &out, Config{
+		Provider: "copilot", Binary: "/bin/echo",
+		BeforeJob: func(_ context.Context, _ uint64, prompt string) error {
+			prepared = append(prepared, prompt)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(prepared, ",") != "first,second" {
+		t.Fatalf("prepared jobs = %v", prepared)
+	}
+	if !strings.Contains(out.String(), "-p first") || !strings.Contains(out.String(), "-p second") {
+		t.Fatalf("jobs were not started: %q", out.String())
+	}
+}
+
+func TestRunDoesNotStartJobWhenPreparationFails(t *testing.T) {
+	var out, status strings.Builder
+	err := Run(context.Background(), strings.NewReader("first\n"), &out, Config{
+		Provider: "copilot", Binary: "/bin/echo", StatusOut: &status,
+		BeforeJob: func(context.Context, uint64, string) error {
+			return errors.New("pull failed")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "-p first") {
+		t.Fatalf("job started after preparation failure: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "prepare job: pull failed") || !strings.Contains(status.String(), "[job 1] 失敗") {
+		t.Fatalf("out=%q status=%q", out.String(), status.String())
 	}
 }
 

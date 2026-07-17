@@ -12,11 +12,14 @@ import (
 
 const FileName = "config.json"
 
+const defaultImplementationDirectory = "../<リポジトリ名>-branches/"
+
 type Config struct {
 	WorkspaceName           string   `json:"workspaceName"`
 	BranchNamePattern       string   `json:"branchNamePattern"`
 	ImplementationDirectory string   `json:"implementationDirectory"`
 	ImplementationLoopCount int      `json:"implementationLoopCount"`
+	BaseBranch              string   `json:"baseBranch"`
 	BuiltinAllowedCommands  []string `json:"builtinAllowedCommands"`
 }
 
@@ -31,7 +34,7 @@ var defaultAllowedCommands = []string{
 func Default() Config {
 	return Config{
 		WorkspaceName: ".workspace", BranchNamePattern: "issue_#<issue番号>",
-		ImplementationDirectory: "../", ImplementationLoopCount: 3,
+		ImplementationDirectory: defaultImplementationDirectory, ImplementationLoopCount: 3, BaseBranch: "main",
 		BuiltinAllowedCommands: DefaultAllowedCommands(),
 	}
 }
@@ -103,13 +106,17 @@ func loadFile(path string) (Config, error) {
 	}
 	configured.ImplementationDirectory = strings.TrimSpace(configured.ImplementationDirectory)
 	if configured.ImplementationDirectory == "" {
-		configured.ImplementationDirectory = "../"
+		configured.ImplementationDirectory = defaultImplementationDirectory
 	}
 	if configured.ImplementationLoopCount <= 0 {
 		configured.ImplementationLoopCount = 3
 	}
 	if configured.ImplementationLoopCount > 10 {
 		configured.ImplementationLoopCount = 10
+	}
+	configured.BaseBranch = strings.TrimSpace(configured.BaseBranch)
+	if configured.BaseBranch == "" {
+		configured.BaseBranch = "main"
 	}
 	configured.BuiltinAllowedCommands = normalizeStringList(configured.BuiltinAllowedCommands)
 	if len(configured.BuiltinAllowedCommands) == 0 {

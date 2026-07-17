@@ -2,6 +2,7 @@ package implementation
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -36,12 +37,12 @@ func TestEnsureWorktreeCreatesConfiguredBranch(t *testing.T) {
 	runGit(t, repository, "add", "README.md")
 	runGit(t, repository, "commit", "-m", "initial")
 
-	engine := New(Config{RepositoryDir: repository, ImplementationDirectory: "../", BranchNamePattern: "issue_#<issue番号>", IssueNumber: 9})
+	engine := New(Config{RepositoryDir: repository, BranchNamePattern: "issue_#<issue番号>", IssueNumber: 9})
 	path, branch, err := engine.ensureWorktree(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if path != filepath.Join(filepath.Dir(repository), "repo-9") || branch != "issue_#9" {
+	if path != filepath.Join(filepath.Dir(repository), "repo-branches", "repo-9") || branch != "issue_#9" {
 		t.Fatalf("path=%q branch=%q", path, branch)
 	}
 	if _, err := os.Stat(filepath.Join(path, ".git")); err != nil {
@@ -161,6 +162,21 @@ func TestEngineRepeatsImplementationUntilVerificationPasses(t *testing.T) {
 	if len(configs) != 2 || configs[0].Sandbox != "workspace-write" || configs[1].Sandbox != "read-only" {
 		t.Fatalf("session configs = %+v", configs)
 	}
+	artifacts := map[string]string{
+		"42_add-feature_1.md":    "# Add feature\n\nfirst",
+		"42_add-feature_検証_1.md": "# Add feature 検証 1回目\n\n" + `{"status":"changes_requested","feedback":"fix tests","summary":"failed"}`,
+		"42_add-feature_2.md":    "# Add feature\n\nsecond",
+		"42_add-feature_検証_2.md": "# Add feature 検証 2回目\n\n" + `{"status":"passed","feedback":"","summary":"確認済み"}`,
+	}
+	for name, want := range artifacts {
+		raw, err := os.ReadFile(filepath.Join(repository, ".workspace", "implementation", name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if string(raw) != want {
+			t.Fatalf("artifact %s = %q, want %q", name, raw, want)
+		}
+	}
 	if err := engine.Close(); err != nil || !implementer.closed || !verifier.closed {
 		t.Fatalf("sessions were not closed: err=%v implementation=%v verifier=%v", err, implementer.closed, verifier.closed)
 	}
@@ -182,6 +198,117 @@ func TestEnsureWorktreeSkipsExistingDirectory(t *testing.T) {
 	}
 	if path != worktree || branch != "feature/7" {
 		t.Fatalf("path=%q branch=%q", path, branch)
+	}
+}
+
+func TestPublishCommitsPushesAndCreatesPullRequest(t *testing.T) {
+	root := t.TempDir()
+	repository := filepath.Join(root, "repo")
+	remote := filepath.Join(root, "remote.git")
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(remote, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, remote, "init", "--bare")
+	runGit(t, repository, "init")
+	runGit(t, repository, "config", "user.email", "test@example.com")
+	runGit(t, repository, "config", "user.name", "test")
+	if err := os.WriteFile(filepath.Join(repository, "README.md"), []byte("initial\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository, "add", "README.md")
+	runGit(t, repository, "commit", "-m", "initial")
+	runGit(t, repository, "branch", "-M", "main")
+	runGit(t, repository, "remote", "add", "origin", remote)
+
+	engine := New(Config{
+		RepositoryDir: repository, ImplementationDirectory: "../", BranchNamePattern: "issue_#<issue番号>",
+		BaseBranch: "main", IssueNumber: 42, IssueTitle: "Add feature",
+	})
+	worktree, branch, err := engine.ensureWorktree(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.worktree, engine.branch = worktree, branch
+	if err := os.WriteFile(filepath.Join(worktree, "feature.txt"), []byte("implemented\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	artifactDir := filepath.Join(repository, ".workspace", "implementation")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "42_add-feature.md"), []byte("# Add feature\n\nsaved implementation result"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldRunGH := runGHCommand
+	var createArgs []string
+	runGHCommand = func(_ context.Context, dir string, args ...string) ([]byte, error) {
+		if dir != worktree {
+			t.Fatalf("gh dir = %q, want %q", dir, worktree)
+		}
+		if len(args) >= 2 && args[0] == "pr" && args[1] == "view" {
+			return nil, errors.New("no pull request")
+		}
+		createArgs = append([]string(nil), args...)
+		return []byte("https://github.com/acme/repo/pull/42\n"), nil
+	}
+	defer func() { runGHCommand = oldRunGH }()
+
+	url, err := engine.Publish(context.Background(), "## 概要\nimplemented")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if url != "https://github.com/acme/repo/pull/42" {
+		t.Fatalf("url = %q", url)
+	}
+	args := strings.Join(createArgs, " ")
+	for _, expected := range []string{"pr create", "--base main", "--title Add feature", "--head issue_#42", "# 実装結果", "saved implementation result", "Closes #42"} {
+		if !strings.Contains(args, expected) {
+			t.Fatalf("gh args do not contain %q: %q", expected, args)
+		}
+	}
+	if strings.Contains(args, "## 概要") {
+		t.Fatalf("PR body used the transient result instead of the saved artifact: %q", args)
+	}
+	cmd := exec.Command("git", "--git-dir", remote, "rev-parse", "refs/heads/"+branch)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("remote branch was not pushed: %v: %s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(worktree, "feature.txt")); err != nil {
+		t.Fatal(err)
+	}
+	status := exec.Command("git", "-C", worktree, "status", "--porcelain")
+	if output, err := status.CombinedOutput(); err != nil || strings.TrimSpace(string(output)) != "" {
+		t.Fatalf("worktree is not clean: err=%v output=%s", err, output)
+	}
+}
+
+func TestPublishReusesExistingPullRequest(t *testing.T) {
+	engine := New(Config{IssueNumber: 1, IssueTitle: "title"})
+	engine.worktree = t.TempDir()
+	engine.branch = "issue_#1"
+	oldRunGH := runGHCommand
+	runGHCommand = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) >= 2 && args[1] == "view" {
+			return []byte("https://github.com/acme/repo/pull/1\n"), nil
+		}
+		t.Fatalf("unexpected gh command: %v", args)
+		return nil, nil
+	}
+	defer func() { runGHCommand = oldRunGH }()
+	// Exercise only the idempotent lookup directly; git publication is covered above.
+	if url, ok := engine.existingPullRequest(context.Background()); !ok || url != "https://github.com/acme/repo/pull/1" {
+		t.Fatalf("existingPullRequest() = (%q, %v)", url, ok)
+	}
+}
+
+func TestPullRequestURLUsesLastURLLine(t *testing.T) {
+	output := "warning: branch was already pushed\nhttps://github.com/acme/repo/pull/8\n"
+	if got := pullRequestURL(output); got != "https://github.com/acme/repo/pull/8" {
+		t.Fatalf("pullRequestURL() = %q", got)
 	}
 }
 

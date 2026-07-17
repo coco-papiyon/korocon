@@ -2,6 +2,7 @@ package issue
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,6 +128,43 @@ func TestRevisionPromptIncludesFeedbackAndIssue(t *testing.T) {
 	}
 }
 
+func TestSyncRepositoryFetchesAndPulls(t *testing.T) {
+	oldRun := runGitSyncCommand
+	var calls [][]string
+	runGitSyncCommand = func(_ context.Context, dir string, args ...string) error {
+		if dir != "/repo" {
+			t.Fatalf("dir = %q", dir)
+		}
+		calls = append(calls, append([]string(nil), args...))
+		return nil
+	}
+	defer func() { runGitSyncCommand = oldRun }()
+
+	if err := SyncRepository(context.Background(), "/repo"); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 || strings.Join(calls[0], " ") != "fetch --prune origin" || strings.Join(calls[1], " ") != "pull --ff-only" {
+		t.Fatalf("calls = %v", calls)
+	}
+}
+
+func TestSyncRepositoryStopsWhenFetchFails(t *testing.T) {
+	oldRun := runGitSyncCommand
+	calls := 0
+	runGitSyncCommand = func(_ context.Context, _ string, _ ...string) error {
+		calls++
+		return errors.New("network unavailable")
+	}
+	defer func() { runGitSyncCommand = oldRun }()
+
+	if err := SyncRepository(context.Background(), "/repo"); err == nil || !strings.Contains(err.Error(), "fetch repository") {
+		t.Fatalf("SyncRepository() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d", calls)
+	}
+}
+
 func TestSaveResultUsesKorobokcleWorkspaceLayout(t *testing.T) {
 	dir := t.TempDir()
 	workflow := &Workflow{
@@ -170,7 +208,7 @@ func TestApproveDesignPostsResultAndSetsApprovedLabel(t *testing.T) {
 	if _, err := workflow.SaveResult("saved design result"); err != nil {
 		t.Fatal(err)
 	}
-	if err := workflow.Approve(context.Background(), "design result"); err != nil {
+	if _, err := workflow.Approve(context.Background(), "design result"); err != nil {
 		t.Fatal(err)
 	}
 	if len(runner.calls) != 4 {
@@ -186,17 +224,41 @@ func TestApproveDesignPostsResultAndSetsApprovedLabel(t *testing.T) {
 	}
 }
 
-func TestApproveImplementationSetsApprovedLabel(t *testing.T) {
+func TestApproveImplementationCreatesPRAndSetsPRCreatedLabel(t *testing.T) {
 	runner := &fakeRunner{responses: []string{`{}`, `{"labels":[{"name":"state:implementation_ready"}]}`, `{}`}}
 	workflow := &Workflow{dir: ".", runner: runner, Issue: Issue{Number: 23}, Phase: PhaseImplementation}
-	if err := workflow.Approve(context.Background(), "implementation result"); err != nil {
+	workflow.SetImplementationPublisher(func(_ context.Context, result string) (string, error) {
+		if result != "implementation result" {
+			t.Fatalf("result = %q", result)
+		}
+		return "https://github.com/acme/repo/pull/23", nil
+	})
+	url, err := workflow.Approve(context.Background(), "implementation result")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if url != "https://github.com/acme/repo/pull/23" {
+		t.Fatalf("url = %q", url)
 	}
 	if len(runner.calls) != 3 {
 		t.Fatalf("calls = %d", len(runner.calls))
 	}
 	edit := strings.Join(runner.calls[2], " ")
-	if !strings.Contains(edit, "--add-label "+labelImplementationApproved) || !strings.Contains(edit, "--remove-label "+labelImplementationReady) {
+	if !strings.Contains(edit, "--add-label "+labelPRCreated) || !strings.Contains(edit, "--remove-label "+labelImplementationReady) {
 		t.Fatalf("unexpected edit command: %q", edit)
+	}
+}
+
+func TestApproveImplementationPublishFailureDoesNotChangeLabels(t *testing.T) {
+	runner := &fakeRunner{}
+	workflow := &Workflow{dir: ".", runner: runner, Issue: Issue{Number: 24}, Phase: PhaseImplementation}
+	workflow.SetImplementationPublisher(func(context.Context, string) (string, error) {
+		return "", errors.New("push failed")
+	})
+	if _, err := workflow.Approve(context.Background(), "implementation result"); err == nil || !strings.Contains(err.Error(), "push failed") {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("labels changed after publish failure: %v", runner.calls)
 	}
 }

@@ -22,6 +22,7 @@ type Config struct {
 	WorkspaceName           string
 	ImplementationDirectory string
 	BranchNamePattern       string
+	BaseBranch              string
 	LoopCount               int
 	IssueNumber             int
 	IssueTitle              string
@@ -37,6 +38,16 @@ type codexSession interface {
 
 var startCodexSession = func(ctx context.Context, cfg runner.SessionConfig) (codexSession, error) {
 	return runner.StartSession(ctx, cfg)
+}
+
+var runGHCommand = func(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("gh %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
 }
 
 type Engine struct {
@@ -59,10 +70,13 @@ func New(cfg Config) *Engine {
 		cfg.WorkspaceName = ".workspace"
 	}
 	if strings.TrimSpace(cfg.ImplementationDirectory) == "" {
-		cfg.ImplementationDirectory = "../"
+		cfg.ImplementationDirectory = "../<リポジトリ名>-branches/"
 	}
 	if strings.TrimSpace(cfg.BranchNamePattern) == "" {
 		cfg.BranchNamePattern = "issue_#<issue番号>"
+	}
+	if strings.TrimSpace(cfg.BaseBranch) == "" {
+		cfg.BaseBranch = "main"
 	}
 	if cfg.LoopCount <= 0 {
 		cfg.LoopCount = 3
@@ -95,6 +109,9 @@ func (e *Engine) Run(ctx context.Context, workflowPrompt, model string, handleRe
 		if err != nil {
 			return runner.TurnResult{}, fmt.Errorf("implementation attempt %d: %w", attempt, err)
 		}
+		if err := e.saveAttemptResult(attempt, false, implemented.Text); err != nil {
+			return runner.TurnResult{}, fmt.Errorf("save implementation attempt %d: %w", attempt, err)
+		}
 		tokens += implemented.Tokens
 
 		if setPhase != nil {
@@ -103,6 +120,9 @@ func (e *Engine) Run(ctx context.Context, workflowPrompt, model string, handleRe
 		checked, err := e.verifier.RunTurn(ctx, e.verificationPrompt(string(design), implemented.Text, attempt), model, onEvent)
 		if err != nil {
 			return runner.TurnResult{}, fmt.Errorf("verification attempt %d: %w", attempt, err)
+		}
+		if err := e.saveAttemptResult(attempt, true, checked.Text); err != nil {
+			return runner.TurnResult{}, fmt.Errorf("save verification attempt %d: %w", attempt, err)
 		}
 		tokens += checked.Tokens
 		verdict, err := parseVerification(checked.Text)
@@ -137,6 +157,130 @@ func (e *Engine) Close() error {
 		e.verifier = nil
 	}
 	return err
+}
+
+func (e *Engine) Publish(ctx context.Context, result string) (string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if strings.TrimSpace(e.worktree) == "" || strings.TrimSpace(e.branch) == "" {
+		return "", errors.New("implementation worktree is not initialized")
+	}
+	message := fmt.Sprintf("feat: implement #%d %s", e.cfg.IssueNumber, strings.TrimSpace(e.cfg.IssueTitle))
+	if err := stageAndCommitIfNeeded(ctx, e.worktree, message); err != nil {
+		return "", fmt.Errorf("commit implementation: %w", err)
+	}
+	if err := ensureBranchHasCommit(ctx, e.worktree, e.cfg.BaseBranch, e.branch); err != nil {
+		return "", fmt.Errorf("prepare implementation branch: %w", err)
+	}
+	if err := publishBranch(ctx, e.worktree, e.branch); err != nil {
+		return "", fmt.Errorf("publish implementation branch: %w", err)
+	}
+	if url, ok := e.existingPullRequest(ctx); ok {
+		return url, nil
+	}
+	artifact := result
+	if saved, err := os.ReadFile(e.implementationArtifactPath()); err == nil {
+		artifact = string(saved)
+	}
+	body := buildPullRequestBody(e.cfg.IssueNumber, artifact)
+	out, err := runGHCommand(ctx, e.worktree,
+		"pr", "create", "--base", e.cfg.BaseBranch, "--title", e.cfg.IssueTitle,
+		"--body", body, "--head", e.branch,
+	)
+	if err != nil {
+		return "", fmt.Errorf("create pull request: %w", err)
+	}
+	url := pullRequestURL(string(out))
+	if url == "" {
+		return "", errors.New("create pull request returned an empty URL")
+	}
+	return url, nil
+}
+
+func (e *Engine) existingPullRequest(ctx context.Context) (string, bool) {
+	out, err := runGHCommand(ctx, e.worktree, "pr", "view", e.branch, "--json", "url", "--jq", ".url")
+	if err != nil {
+		return "", false
+	}
+	url := strings.TrimSpace(string(out))
+	return url, url != ""
+}
+
+func stageAndCommitIfNeeded(ctx context.Context, dir, message string) error {
+	out, err := runGitOutput(ctx, dir, "status", "--porcelain")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(out) == "" {
+		return nil
+	}
+	if _, err := runGitOutput(ctx, dir, "add", "-A"); err != nil {
+		return err
+	}
+	_, err = runGitOutput(ctx, dir, "commit", "-m", message)
+	return err
+}
+
+func ensureBranchHasCommit(ctx context.Context, dir, baseBranch, branch string) error {
+	out, err := runGitOutput(ctx, dir, "rev-list", "--count", baseBranch+".."+branch)
+	if err != nil {
+		return err
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return fmt.Errorf("parse branch commit count: %w", err)
+	}
+	if count > 0 {
+		return nil
+	}
+	_, err = runGitOutput(ctx, dir, "commit", "--allow-empty", "-m", "chore: prepare PR for "+branch)
+	return err
+}
+
+func publishBranch(ctx context.Context, dir, branch string) error {
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "ls-remote", "--exit-code", "--heads", "origin", branch)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		if _, err := runGitOutput(ctx, dir, "pull", "--rebase", "origin", branch); err != nil {
+			return fmt.Errorf("rebase remote branch before push: %w", err)
+		}
+	} else {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 2 {
+			return fmt.Errorf("git ls-remote --heads origin %s: %w: %s", branch, err, strings.TrimSpace(string(out)))
+		}
+	}
+	_, err = runGitOutput(ctx, dir, "push", "-u", "origin", branch+":"+branch)
+	return err
+}
+
+func runGitOutput(ctx context.Context, dir string, args ...string) (string, error) {
+	command := append([]string{"-C", dir}, args...)
+	cmd := exec.CommandContext(ctx, "git", command...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
+}
+
+func buildPullRequestBody(issueNumber int, result string) string {
+	artifact := strings.TrimSpace(result)
+	if lines := strings.Split(artifact, "\n"); len(lines) > 0 && strings.HasPrefix(strings.TrimSpace(lines[0]), "# ") {
+		artifact = strings.TrimSpace(strings.Join(lines[1:], "\n"))
+	}
+	return strings.Join([]string{"# 実装結果", "", artifact, "", "Closes #" + strconv.Itoa(issueNumber)}, "\n")
+}
+
+func pullRequestURL(output string) string {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, "https://") || strings.HasPrefix(line, "http://") {
+			return line
+		}
+	}
+	return ""
 }
 
 func (e *Engine) ensureStarted(ctx context.Context, model string, handleRequest runner.ServerRequestHandler) error {
@@ -174,7 +318,10 @@ func (e *Engine) ensureWorktree(ctx context.Context) (string, string, error) {
 		return "", "", fmt.Errorf("resolve repository directory: %w", err)
 	}
 	repositoryName := strings.TrimSuffix(filepath.Base(filepath.Clean(repositoryDir)), ".git")
-	root := e.cfg.ImplementationDirectory
+	root := strings.NewReplacer(
+		"<リポジトリ名>", repositoryName,
+		"<repositoryName>", repositoryName,
+	).Replace(e.cfg.ImplementationDirectory)
 	if !filepath.IsAbs(root) {
 		root = filepath.Join(repositoryDir, root)
 	}
@@ -205,6 +352,35 @@ func (e *Engine) ensureWorktree(ctx context.Context) (string, string, error) {
 func (e *Engine) designArtifactPath() string {
 	name := fmt.Sprintf("%d_%s.md", e.cfg.IssueNumber, sanitizePart(e.cfg.IssueTitle))
 	return filepath.Join(e.cfg.RepositoryDir, e.cfg.WorkspaceName, "design", name)
+}
+
+func (e *Engine) implementationArtifactPath() string {
+	name := fmt.Sprintf("%d_%s.md", e.cfg.IssueNumber, sanitizePart(e.cfg.IssueTitle))
+	return filepath.Join(e.cfg.RepositoryDir, e.cfg.WorkspaceName, "implementation", name)
+}
+
+func (e *Engine) attemptArtifactPath(attempt int, verification bool) string {
+	name := fmt.Sprintf("%d_%s_%d.md", e.cfg.IssueNumber, sanitizePart(e.cfg.IssueTitle), attempt)
+	if verification {
+		name = fmt.Sprintf("%d_%s_検証_%d.md", e.cfg.IssueNumber, sanitizePart(e.cfg.IssueTitle), attempt)
+	}
+	return filepath.Join(e.cfg.RepositoryDir, e.cfg.WorkspaceName, "implementation", name)
+}
+
+func (e *Engine) saveAttemptResult(attempt int, verification bool, result string) error {
+	path := e.attemptArtifactPath(attempt, verification)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create attempt artifact directory: %w", err)
+	}
+	title := e.cfg.IssueTitle
+	if verification {
+		title = fmt.Sprintf("%s 検証 %d回目", e.cfg.IssueTitle, attempt)
+	}
+	content := fmt.Sprintf("# %s\n\n%s", strings.TrimSpace(title), strings.TrimSpace(result))
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write attempt artifact: %w", err)
+	}
+	return nil
 }
 
 func (e *Engine) implementationPrompt(workflowPrompt, design, feedback string, attempt int) string {

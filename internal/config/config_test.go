@@ -16,8 +16,11 @@ func TestLoadFileUsesDefaultWhenMissing(t *testing.T) {
 	if configured.WorkspaceName != ".workspace" {
 		t.Fatalf("workspaceName = %q", configured.WorkspaceName)
 	}
-	if configured.BranchNamePattern != "issue_#<issue番号>" || configured.ImplementationDirectory != "../" || configured.ImplementationLoopCount != 3 {
+	if configured.BranchNamePattern != "issue_#<issue番号>" || configured.ImplementationDirectory != "../<リポジトリ名>-branches/" || configured.ImplementationLoopCount != 3 {
 		t.Fatalf("defaults = %+v", configured)
+	}
+	if configured.BaseBranch != "main" {
+		t.Fatalf("baseBranch = %q", configured.BaseBranch)
 	}
 	if !reflect.DeepEqual(configured.BuiltinAllowedCommands, DefaultAllowedCommands()) {
 		t.Fatalf("builtinAllowedCommands = %+v", configured.BuiltinAllowedCommands)
@@ -89,6 +92,20 @@ func TestLoadFileReadsImplementationSettings(t *testing.T) {
 	}
 	if configured.BranchNamePattern != "feature/<issueNumber>" || configured.ImplementationDirectory != "../worktrees" || configured.ImplementationLoopCount != 5 {
 		t.Fatalf("config = %+v", configured)
+	}
+}
+
+func TestLoadFileReadsBaseBranch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, []byte(`{"baseBranch":"develop"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configured, err := loadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured.BaseBranch != "develop" {
+		t.Fatalf("baseBranch = %q", configured.BaseBranch)
 	}
 }
 

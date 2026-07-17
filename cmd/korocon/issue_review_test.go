@@ -16,6 +16,8 @@ type fakeReviewWorkflow struct {
 	started      int
 	finished     int
 	approvedWith string
+	approvedURL  string
+	approveErr   error
 	revisions    []string
 	savedResults []string
 	phase        issueworkflow.Phase
@@ -30,6 +32,7 @@ func (w *fakeReviewWorkflow) Start(context.Context) error {
 	w.started++
 	return nil
 }
+
 func (w *fakeReviewWorkflow) Finish(_ context.Context, err error) error {
 	if err == nil {
 		w.finished++
@@ -40,9 +43,9 @@ func (w *fakeReviewWorkflow) SaveResult(result string) (string, error) {
 	w.savedResults = append(w.savedResults, result)
 	return ".workspace/design/1_design.md", nil
 }
-func (w *fakeReviewWorkflow) Approve(_ context.Context, result string) error {
+func (w *fakeReviewWorkflow) Approve(_ context.Context, result string) (string, error) {
 	w.approvedWith = result
-	return nil
+	return w.approvedURL, w.approveErr
 }
 func (w *fakeReviewWorkflow) SetPhase(phase issueworkflow.Phase) { w.phase = phase }
 
@@ -73,9 +76,10 @@ func TestIssueReviewApprovesEmptyInput(t *testing.T) {
 }
 
 func TestIssueReviewImplementationApprovalClosesSessions(t *testing.T) {
-	workflow := &fakeReviewWorkflow{prompt: "implement"}
+	workflow := &fakeReviewWorkflow{prompt: "implement", approvedURL: "https://github.com/acme/repo/pull/1"}
 	closed := 0
-	controller := newIssueReviewController(workflow, issueworkflow.PhaseImplementation, &bytes.Buffer{}, func(prompt string) *daemon.JobSpec {
+	var out bytes.Buffer
+	controller := newIssueReviewController(workflow, issueworkflow.PhaseImplementation, &out, func(prompt string) *daemon.JobSpec {
 		return &daemon.JobSpec{Prompt: prompt}
 	}, func() error {
 		closed++
@@ -93,6 +97,36 @@ func TestIssueReviewImplementationApprovalClosesSessions(t *testing.T) {
 	}
 	if !action.Handled || closed != 1 {
 		t.Fatalf("action=%+v closed=%d", action, closed)
+	}
+	if !strings.Contains(out.String(), "PRを作成しました: https://github.com/acme/repo/pull/1") {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestIssueReviewImplementationApprovalFailureKeepsSessionsAndPendingState(t *testing.T) {
+	workflow := &fakeReviewWorkflow{prompt: "implement", approveErr: errors.New("push failed")}
+	closed := 0
+	controller := newIssueReviewController(workflow, issueworkflow.PhaseImplementation, &bytes.Buffer{}, nil, func() error {
+		closed++
+		return nil
+	})
+	if err := controller.OnJobStart(context.Background(), 1, "implement"); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.OnJobFinish(context.Background(), 1, "implement", "result", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.HandleInput(context.Background(), "approve"); err == nil || !strings.Contains(err.Error(), "push failed") {
+		t.Fatalf("approval error = %v", err)
+	}
+	if closed != 0 {
+		t.Fatalf("implementation sessions closed after failed approval: %d", closed)
+	}
+	workflow.approveErr = nil
+	workflow.approvedURL = "https://github.com/acme/repo/pull/2"
+	action, err := controller.HandleInput(context.Background(), "approve")
+	if err != nil || !action.Handled || closed != 1 {
+		t.Fatalf("retry action=%+v err=%v closed=%d", action, err, closed)
 	}
 }
 

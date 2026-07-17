@@ -34,6 +34,7 @@ type Config struct {
 	InitialJob        *JobSpec
 	AllowedCommands   []string
 	AddAllowedCommand func(string) error
+	BeforeJob         func(context.Context, uint64, string) error
 	OnJobStart        func(context.Context, uint64, string) error
 	OnJobFinish       func(context.Context, uint64, string, string, error) error
 	HandleInput       func(context.Context, string) (InputAction, error)
@@ -442,6 +443,14 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		jobModel := currentModel
 		modelMu.RUnlock()
 		status("[job %d] 実行中（provider: %s, model: %s）.", id, provider, jobModel)
+		if cfg.BeforeJob != nil {
+			if err := cfg.BeforeJob(ctx, id, prompt); err != nil {
+				_ = writeResult(id, "", fmt.Errorf("prepare job: %w", err))
+				status("\r\033[2K[job %d] 失敗\n", id)
+				promptMark()
+				return
+			}
+		}
 		if cfg.OnJobStart != nil {
 			if err := cfg.OnJobStart(ctx, id, prompt); err != nil {
 				_ = writeResult(id, "", fmt.Errorf("start job: %w", err))

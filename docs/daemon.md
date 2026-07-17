@@ -17,8 +17,9 @@ go build -o ./korocon ./cmd/korocon
 {
   "workspaceName": ".workspace",
   "branchNamePattern": "issue_#<issue番号>",
-  "implementationDirectory": "../",
+  "implementationDirectory": "../<リポジトリ名>-branches/",
   "implementationLoopCount": 3,
+  "baseBranch": "main",
   "builtinAllowedCommands": ["go test", "git diff", "git status"]
 }
 ```
@@ -45,13 +46,19 @@ go build -o ./korocon ./cmd/korocon
 
 ## ジョブ投入
 
+すべてのジョブは、AIへ投入する前に対象リポジトリで`git fetch --prune origin`と`git pull --ff-only`を実行します。同期に失敗したジョブはAIを開始せず失敗として表示します。
+
 起動時にIssueを選択した場合は、取得したIssueが最初のジョブとして自動投入されます。`state:design_approved`がなければ設計、あれば実装です。設計・実装の具体的な方法はリポジトリのスキルへ委ねられます。
 
 Issueジョブの結果を表示すると、区切り線を挟んで承認または修正指示の案内と`> `を表示します。未入力状態でEnter、`承認`、`approve`、`a`などは承認です。それ以外の入力はAIへのフィードバックとなり、同じ工程を再実行します。実装完了時も同じ入力フローです。
 
 結果は案内表示の前に、対象リポジトリの`<workspaceName>/design/`または`<workspaceName>/implementation/`へ保存します。ファイル名は`<issue番号>_<正規化タイトル>.md`です。
 
-設計承認後は`<implementationDirectory>/<リポジトリ名>-<Issue番号>`へworktreeを作成し、実装用と検証用の2つのCodexを起動します。実装、読み取り専用検証、指摘反映を`implementationLoopCount`回まで繰り返し、検証合格後に実装承認を待ちます。
+実装・検証ループの各応答は、`<issue番号>_<正規化タイトル>_<回数>.md`と`<issue番号>_<正規化タイトル>_検証_<回数>.md`へそれぞれ保存します。
+
+設計承認後は`<implementationDirectory>/<リポジトリ名>-<Issue番号>`へworktreeを作成します。既定の親ディレクトリは`../<リポジトリ名>-branches/`です。そのworktreeで実装用と検証用の2つのCodexを起動し、実装、読み取り専用検証、指摘反映を`implementationLoopCount`回まで繰り返して、検証合格後に実装承認を待ちます。
+
+実装承認時はworktreeの変更をcommitし、ブランチをpushして`baseBranch`向けのPRを作成します。成功するとPR URLを表示してIssueを`state:pr_created`へ更新します。失敗時は承認待ちとCodexセッションを維持します。
 
 標準入力へプロンプトを1行ずつ書き込みます。入力中もCLIは操作できますが、Codexのターンは入力順に実行されます。
 

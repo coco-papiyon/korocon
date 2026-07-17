@@ -26,6 +26,7 @@ const (
 	labelImplementationRunning  = "state:implementation_running"
 	labelImplementationReady    = "state:implementation_ready"
 	labelImplementationApproved = "state:implementation_approved"
+	labelPRCreated              = "state:pr_created"
 	labelFailed                 = "state:failed"
 )
 
@@ -74,6 +75,16 @@ type commandRunner interface {
 
 type ghCommandRunner struct{}
 
+var runGitSyncCommand = func(ctx context.Context, dir string, args ...string) error {
+	command := append([]string{"-C", dir}, args...)
+	cmd := exec.CommandContext(ctx, "git", command...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 func (ghCommandRunner) Run(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Dir = dir
@@ -87,11 +98,12 @@ func (ghCommandRunner) Run(ctx context.Context, dir string, args ...string) ([]b
 // Workflow manages one selected issue through the same issue state labels as
 // korobokcle. The AI-specific procedure remains owned by repository skills.
 type Workflow struct {
-	dir           string
-	runner        commandRunner
-	Issue         Issue
-	Phase         Phase
-	workspaceName string
+	dir                   string
+	runner                commandRunner
+	Issue                 Issue
+	Phase                 Phase
+	workspaceName         string
+	publishImplementation func(context.Context, string) (string, error)
 }
 
 func Load(ctx context.Context, workingDir string, number int, workspaceName string) (*Workflow, error) {
@@ -156,6 +168,20 @@ func (w *Workflow) Prompt() string {
 
 func (w *Workflow) SetPhase(phase Phase) {
 	w.Phase = phase
+}
+
+func (w *Workflow) SetImplementationPublisher(publisher func(context.Context, string) (string, error)) {
+	w.publishImplementation = publisher
+}
+
+func SyncRepository(ctx context.Context, dir string) error {
+	if err := runGitSyncCommand(ctx, dir, "fetch", "--prune", "origin"); err != nil {
+		return fmt.Errorf("fetch repository: %w", err)
+	}
+	if err := runGitSyncCommand(ctx, dir, "pull", "--ff-only"); err != nil {
+		return fmt.Errorf("pull repository: %w", err)
+	}
+	return nil
 }
 
 func (w *Workflow) RevisionPrompt(feedback string) string {
@@ -239,8 +265,20 @@ func (w *Workflow) SaveResult(result string) (string, error) {
 	return filepath.ToSlash(relative), nil
 }
 
-func (w *Workflow) Approve(ctx context.Context, result string) error {
-	target := labelImplementationApproved
+func (w *Workflow) Approve(ctx context.Context, result string) (string, error) {
+	if w.Phase == PhaseImplementation {
+		if w.publishImplementation == nil {
+			return "", errors.New("implementation publisher is not configured")
+		}
+		url, err := w.publishImplementation(ctx, result)
+		if err != nil {
+			return "", err
+		}
+		if err := w.setStateLabel(ctx, labelPRCreated); err != nil {
+			return "", fmt.Errorf("mark pull request created: %w", err)
+		}
+		return url, nil
+	}
 	if w.Phase == PhaseDesign {
 		body := w.artifactContent(result)
 		if path, err := w.artifactPath(); err == nil {
@@ -249,11 +287,10 @@ func (w *Workflow) Approve(ctx context.Context, result string) error {
 			}
 		}
 		if _, err := w.runner.Run(ctx, w.dir, "issue", "comment", strconv.Itoa(w.Issue.Number), "--body", body); err != nil {
-			return fmt.Errorf("post design result: %w", err)
+			return "", fmt.Errorf("post design result: %w", err)
 		}
-		target = labelDesignApproved
 	}
-	return w.setStateLabel(ctx, target)
+	return "", w.setStateLabel(ctx, labelDesignApproved)
 }
 
 func (w *Workflow) artifactPath() (string, error) {

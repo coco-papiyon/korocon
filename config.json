@@ -1,8 +1,9 @@
 {
   "workspaceName": ".workspace",
   "branchNamePattern": "issue_#<issue番号>",
-  "implementationDirectory": "../",
+  "implementationDirectory": "../<リポジトリ名>-branches/",
   "implementationLoopCount": 3,
+  "baseBranch": "main",
   "builtinAllowedCommands": [
     "npm install", "npm ci", "npm test",
     "go build", "go test", "go mod tidy", "go mod download",
