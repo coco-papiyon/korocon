@@ -20,21 +20,23 @@ import (
 
 // Config controls the resident prompt worker.
 type Config struct {
-	Provider      string
-	Binary        string
-	Model         string
-	WorkingDir    string
-	AllowAllTools bool
-	StreamLogs    bool
-	LogOut        io.Writer
-	LogErr        io.Writer
-	StatusOut     io.Writer
-	ResultOut     io.Writer
-	InitialPrompt string
-	InitialJob    *JobSpec
-	OnJobStart    func(context.Context, uint64, string) error
-	OnJobFinish   func(context.Context, uint64, string, string, error) error
-	HandleInput   func(context.Context, string) (InputAction, error)
+	Provider          string
+	Binary            string
+	Model             string
+	WorkingDir        string
+	AllowAllTools     bool
+	StreamLogs        bool
+	LogOut            io.Writer
+	LogErr            io.Writer
+	StatusOut         io.Writer
+	ResultOut         io.Writer
+	InitialPrompt     string
+	InitialJob        *JobSpec
+	AllowedCommands   []string
+	AddAllowedCommand func(string) error
+	OnJobStart        func(context.Context, uint64, string) error
+	OnJobFinish       func(context.Context, uint64, string, string, error) error
+	HandleInput       func(context.Context, string) (InputAction, error)
 }
 
 // InputAction tells Run whether an external workflow consumed an input and
@@ -61,6 +63,7 @@ type residentJob struct {
 
 type approvalPrompt struct {
 	decision chan string
+	command  string
 }
 
 const maxProgressDots = 40
@@ -84,8 +87,10 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 	var latestDiff string
 	var hasLatestDiff bool
 	var approvalMu sync.Mutex
+	var allowedMu sync.RWMutex
 	var sessionMu sync.Mutex
 	var pendingApproval *approvalPrompt
+	allowedCommands := normalizeAllowedCommands(cfg.AllowedCommands)
 	logOut := synchronizedWriter{mu: &logMu, dst: cfg.LogOut}
 	logErr := synchronizedWriter{mu: &logMu, dst: cfg.LogErr}
 	// Tool command details are already present in the raw JSON log. Do not
@@ -120,12 +125,19 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			status("\r\033[2K[Codex応答待ち] %s\n", method)
 			return nil, fmt.Errorf("unsupported Codex request: %s", method)
 		}
+		allowedMu.RLock()
+		allowed := append([]string(nil), allowedCommands...)
+		allowedMu.RUnlock()
+		if method == "item/commandExecution/requestApproval" && commandRequestAllowed(params, allowed) {
+			status("\r\033[2K[自動承認] %s\n", approvalDescription(method, params))
+			return map[string]string{"decision": "accept"}, nil
+		}
 		var detail struct {
 			Command string `json:"command"`
 			Reason  string `json:"reason"`
 		}
 		_ = json.Unmarshal(params, &detail)
-		prompt := &approvalPrompt{decision: make(chan string, 1)}
+		prompt := &approvalPrompt{decision: make(chan string, 1), command: approvalCommand(params)}
 		approvalMu.Lock()
 		if pendingApproval != nil {
 			approvalMu.Unlock()
@@ -147,7 +159,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		if description == "" {
 			description = method
 		}
-		status("\r\033[2K[承認待ち] %s\n/approve または /decline を入力してください。\n", description)
+		status("\r\033[2K[承認待ち] %s\n未入力状態でEnterまたは/approveで承認、/allowで承認して自動承認コマンドへ追加、/declineで拒否します。\n", description)
 		promptMark()
 		select {
 		case <-requestCtx.Done():
@@ -189,6 +201,39 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		commandOut = cfg.StatusOut
 	}
 	var start func(string)
+	respondApproval := func(decision string, addAllowed bool) {
+		approvalMu.Lock()
+		approval := pendingApproval
+		approvalMu.Unlock()
+		if approval == nil {
+			_, _ = fmt.Fprintln(commandOut, "承認待ちの操作はありません。")
+			return
+		}
+		if addAllowed {
+			if approval.command == "" {
+				_, _ = fmt.Fprintln(commandOut, "自動承認へ追加できるコマンドを取得できませんでした。")
+				return
+			}
+			if cfg.AddAllowedCommand == nil {
+				_, _ = fmt.Fprintln(commandOut, "自動承認コマンドの保存機能が設定されていません。")
+				return
+			}
+			if err := cfg.AddAllowedCommand(approval.command); err != nil {
+				_, _ = fmt.Fprintf(commandOut, "自動承認コマンドの保存に失敗しました: %v\n", err)
+				return
+			}
+			allowedMu.Lock()
+			allowedCommands = normalizeAllowedCommands(append(allowedCommands, approval.command))
+			allowedMu.Unlock()
+			_, _ = fmt.Fprintf(commandOut, "自動承認コマンドへ追加しました: %s\n", approval.command)
+		}
+		select {
+		case approval.decision <- decision:
+			_, _ = fmt.Fprintf(commandOut, "操作を%sしました。\n", map[bool]string{true: "承認", false: "拒否"}[decision == "accept"])
+		default:
+			_, _ = fmt.Fprintln(commandOut, "承認応答はすでに送信されています。")
+		}
+	}
 	command := func(line string) {
 		fields := strings.Fields(line)
 		if len(fields) == 0 {
@@ -231,24 +276,12 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			currentModel = selected
 			modelMu.Unlock()
 			_, _ = fmt.Fprintf(commandOut, "モデルを %s に切り替えました。\n", selected)
-		case "/approve", "/decline":
-			approvalMu.Lock()
-			approval := pendingApproval
-			approvalMu.Unlock()
-			if approval == nil {
-				_, _ = fmt.Fprintln(commandOut, "承認待ちの操作はありません。")
-				return
-			}
+		case "/approve", "/allow", "/decline":
 			decision := "accept"
 			if fields[0] == "/decline" {
 				decision = "decline"
 			}
-			select {
-			case approval.decision <- decision:
-				_, _ = fmt.Fprintf(commandOut, "操作を%sしました。\n", map[bool]string{true: "承認", false: "拒否"}[decision == "accept"])
-			default:
-				_, _ = fmt.Fprintln(commandOut, "承認応答はすでに送信されています。")
-			}
+			respondApproval(decision, fields[0] == "/allow")
 		case "/diff":
 			diffMu.RLock()
 			diff, available := latestDiff, hasLatestDiff
@@ -526,6 +559,16 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 	}
 
 	processInput := func(line string) {
+		if strings.TrimSpace(line) == "" {
+			approvalMu.Lock()
+			approval := pendingApproval
+			approvalMu.Unlock()
+			if approval != nil {
+				respondApproval("accept", false)
+				promptMark()
+				return
+			}
+		}
 		if cfg.HandleInput != nil {
 			action, err := cfg.HandleInput(ctx, line)
 			if err != nil {

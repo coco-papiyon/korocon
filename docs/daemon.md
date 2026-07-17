@@ -18,7 +18,8 @@ go build -o ./korocon ./cmd/korocon
   "workspaceName": ".workspace",
   "branchNamePattern": "issue_#<issue番号>",
   "implementationDirectory": "../",
-  "implementationLoopCount": 3
+  "implementationLoopCount": 3,
+  "builtinAllowedCommands": ["go test", "git diff", "git status"]
 }
 ```
 
@@ -81,8 +82,8 @@ printf '%s\n' 'テストの不足箇所を調べて' > /tmp/korocon-prompts
 
 ## 注意事項
 
-- CodexはJSONLイベントを出力し、ツール実行の承認を自動許可しません。
-- 承認要求が表示された場合は`/approve`または`/decline`で応答します。
+- `builtinAllowedCommands`に一致する安全なコマンド実行要求は自動承認します。省略または空配列の場合はkorobokcleと同じ既定リストです。
+- 許可外の承認要求が表示された場合は未入力Enterまたは`/approve`で今回だけ承認し、`/allow`で承認して`config.json`の自動承認リストへ追加し、`/decline`で拒否します。
 - CLIはプロンプトをシェルに渡しませんが、AI CLIにはそのまま渡されます。
 - FIFOやCLIの標準出力には、必要に応じて適切なUnix権限を設定してください。
 - 実行するユーザーには、作業ディレクトリとAI CLIを実行する権限が必要です。

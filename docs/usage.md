@@ -30,7 +30,8 @@ tools/
   "workspaceName": ".workspace",
   "branchNamePattern": "issue_#<issue番号>",
   "implementationDirectory": "../",
-  "implementationLoopCount": 3
+  "implementationLoopCount": 3,
+  "builtinAllowedCommands": ["go test", "git diff", "git status"]
 }
 ```
 
@@ -41,6 +42,7 @@ tools/
 | `branchNamePattern` | `issue_#<issue番号>` | 実装worktreeのブランチ名。`<issue番号>`または`<issueNumber>`を置換します。 |
 | `implementationDirectory` | `../` | 実装worktreeを置く親ディレクトリ。相対パスは対象リポジトリ基準です。 |
 | `implementationLoopCount` | `3` | 実装と検証の最大試行回数。最大10回です。 |
+| `builtinAllowedCommands` | korobokcleと同じ既定リスト | Codexのコマンド実行要求を自動承認するコマンドです。省略または空配列では既定リストを使用します。 |
 
 プロンプトを標準入力から渡すこともできます。
 
@@ -114,7 +116,9 @@ Codexへ渡す内容は「設計または実装を行う」という工程指示
 
 入力の先頭が `/` の行はコマンドとして扱われます。`/model` で選択可能なモデルを表示し、`/model 1` のように番号、または`/model gpt-5.6-terra` のようにモデル名を指定して切り替えます。koroconは常駐中のCodexへ`/model`相当のモデル変更要求を標準入力で送信し、Codexの成功応答後に表示中のモデルを更新します。選択したモデルは次のターンから同じthreadへ適用されます。先頭に空白がある行はコマンドではなくプロンプトです。
 
-Codexがコマンド実行やファイル変更の承認を要求した場合、画面に対象を表示します。`/approve`で承認し、`/decline`で拒否します。自動承認や`--dangerously-bypass-approvals-and-sandbox`は使用しません。
+Codexがコマンド実行を要求した場合、`builtinAllowedCommands`に一致するコマンドは自動承認し、`[自動承認]`と対象を表示します。完全一致のほか、安全な引数やLinuxの安全な環境変数代入を付けた実行とCodexが提示する`proposedExecpolicyAmendment`、`commandActions`を判定します。`;`、`&&`、パイプ、コマンド置換などを含む複合実行は、許可コマンドから始まっていても自動承認しません。
+
+許可リストに一致しない操作やファイル変更要求は画面へ表示します。未入力状態でEnterまたは`/approve`を入力すると今回だけ承認し、`/decline`で拒否します。`/allow`を入力すると今回の操作を承認し、Codexの`commandActions`から抽出した具体的なコマンドを実行中の許可リストとバイナリ横の`config.json`へ追加します。Linuxの先頭環境変数代入は除去して保存するため、`GOCACHE=/tmp/cache go test ./...`は`go test ./...`として追加されます。設定保存に失敗した場合は承認せず、承認待ちを継続します。`--dangerously-bypass-approvals-and-sandbox`は使用しません。
 
 ```text
 provider: codex

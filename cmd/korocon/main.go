@@ -82,7 +82,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 	if binaryName == "" {
 		binaryName = *provider
 	}
-	fmt.Fprintf(stderr, "provider: %s\nmodel: %s\nbinary: %s\nconfig: %s\nworkspace: %s\nbranch: %s\nimplementation directory: %s\nimplementation loops: %d\nlog: %s\n", *provider, *model, binaryName, configPath, configured.WorkspaceName, configured.BranchNamePattern, configured.ImplementationDirectory, configured.ImplementationLoopCount, *logPath)
+	fmt.Fprintf(stderr, "provider: %s\nmodel: %s\nbinary: %s\nconfig: %s\nworkspace: %s\nbranch: %s\nimplementation directory: %s\nimplementation loops: %d\nauto-approved commands: %d\nlog: %s\n", *provider, *model, binaryName, configPath, configured.WorkspaceName, configured.BranchNamePattern, configured.ImplementationDirectory, configured.ImplementationLoopCount, len(configured.BuiltinAllowedCommands), *logPath)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	startupInput, selectedIssue, err := selectGitHubInformation(ctx, in, stdout, *dir, configured.WorkspaceName)
@@ -124,8 +124,17 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 		Provider: *provider, Binary: *binary, Model: *model,
 		WorkingDir: *dir, AllowAllTools: *allowAllTools, StreamLogs: *streamLogs,
 		LogOut: logFile, LogErr: logFile, StatusOut: stderr, ResultOut: stderr,
-		InitialPrompt: initialPrompt,
-		InitialJob:    initialJob,
+		InitialPrompt:   initialPrompt,
+		InitialJob:      initialJob,
+		AllowedCommands: configured.BuiltinAllowedCommands,
+	}
+	cfg.AddAllowedCommand = func(command string) error {
+		updated, _ := appconfig.AddBuiltinAllowedCommand(configured, command)
+		if err := appconfig.Save(configPath, updated); err != nil {
+			return err
+		}
+		configured = updated
+		return nil
 	}
 	if review != nil {
 		cfg.OnJobStart = review.OnJobStart
@@ -322,6 +331,7 @@ Interactive mode:
 Interactive commands:
   /model [NUMBER|NAME]  list or switch the model
   /approve              approve the pending Codex operation
+  /allow                approve and add the command to automatic approvals
   /decline              decline the pending Codex operation
   /diff                 print the latest completed job's git diff
   /diff FILE            save that diff under the working directory

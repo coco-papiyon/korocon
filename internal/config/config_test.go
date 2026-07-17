@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -17,6 +18,62 @@ func TestLoadFileUsesDefaultWhenMissing(t *testing.T) {
 	}
 	if configured.BranchNamePattern != "issue_#<issue番号>" || configured.ImplementationDirectory != "../" || configured.ImplementationLoopCount != 3 {
 		t.Fatalf("defaults = %+v", configured)
+	}
+	if !reflect.DeepEqual(configured.BuiltinAllowedCommands, DefaultAllowedCommands()) {
+		t.Fatalf("builtinAllowedCommands = %+v", configured.BuiltinAllowedCommands)
+	}
+}
+
+func TestDefaultAllowedCommandsMatchesKorobokcle(t *testing.T) {
+	want := []string{
+		"npm install", "npm ci", "npm test",
+		"go build", "go test", "go mod tidy", "go mod download",
+		"git log", "git diff", "git status", "git stash",
+		"ls", "dir", "cat", "type", "more", "head", "echo", "sed", "set", "pwd", "grep", "find", "tee", "wc",
+		"get-childitem", "get-content", "select-object", "select-string",
+	}
+	if got := DefaultAllowedCommands(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("DefaultAllowedCommands() = %+v, want %+v", got, want)
+	}
+}
+
+func TestLoadFileNormalizesBuiltinAllowedCommands(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	content := []byte(`{"builtinAllowedCommands":[" go test ","GO   TEST","","git diff"]}`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configured, err := loadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"go test", "git diff"}
+	if !reflect.DeepEqual(configured.BuiltinAllowedCommands, want) {
+		t.Fatalf("builtinAllowedCommands = %+v, want %+v", configured.BuiltinAllowedCommands, want)
+	}
+}
+
+func TestAddBuiltinAllowedCommandAndSave(t *testing.T) {
+	configured := Default()
+	updated, added := AddBuiltinAllowedCommand(configured, "go test ./...")
+	if !added {
+		t.Fatal("expected a new command to be added")
+	}
+	updated, added = AddBuiltinAllowedCommand(updated, " GO   TEST ./... ")
+	if added {
+		t.Fatal("expected normalized duplicate command not to be added")
+	}
+
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := Save(path, updated); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.BuiltinAllowedCommands, updated.BuiltinAllowedCommands) {
+		t.Fatalf("saved commands = %+v, want %+v", loaded.BuiltinAllowedCommands, updated.BuiltinAllowedCommands)
 	}
 }
 
