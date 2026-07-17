@@ -1,0 +1,4 @@
+interface:
+  display_name: "設計結果をもとに検証"
+  short_description: "設計書の確認項目に沿って検証結果・指摘事項・残課題を整理する"
+  default_prompt: "Use $verifier-from-design to 設計結果をもとに検証内容を日本語で簡潔にまとめてください。"

@@ -22,6 +22,18 @@ type Request struct {
 	Stderr        io.Writer
 }
 
+// AvailableModels is the set of models offered by the interactive selector.
+// Keep this in the runner package so the selector and provider argument
+// handling cannot drift apart.
+var AvailableModels = []string{
+	"gpt-5.6-sol",
+	"gpt-5.6-terra",
+	"gpt-5.6-luna",
+	"gpt-5.5",
+	"gpt-5.4",
+	"gpt-5.4-mini",
+}
+
 // BuildArgs returns arguments without invoking a shell. Keeping this separate
 // makes the permission boundary easy to test and prevents prompt injection from
 // becoming shell syntax.
@@ -31,19 +43,29 @@ func BuildArgs(req Request) ([]string, error) {
 	}
 	provider := req.Provider
 	if provider == "" {
-		provider = "copilot"
+		provider = "codex"
 	}
-	if provider != "copilot" {
+	switch provider {
+	case "codex":
+		args := []string{"exec", "--json", "--sandbox", "workspace-write"}
+		if req.Model == "" {
+			args = []string{"exec", "--json", "--sandbox", "workspace-write"}
+		} else {
+			args = append(args, "--model", req.Model)
+		}
+		return append(args, req.Prompt), nil
+	case "copilot":
+		args := []string{"-p", req.Prompt, "-s", "--no-ask-user"}
+		if req.Model != "" {
+			args = append(args, "--model", req.Model)
+		}
+		if req.AllowAllTools {
+			args = append(args, "--allow-all-tools")
+		}
+		return args, nil
+	default:
 		return nil, fmt.Errorf("unsupported provider %q", provider)
 	}
-	args := []string{"-p", req.Prompt, "-s", "--no-ask-user"}
-	if req.Model != "" {
-		args = append(args, "--model", req.Model)
-	}
-	if req.AllowAllTools {
-		args = append(args, "--allow-all-tools")
-	}
-	return args, nil
 }
 
 // Run executes the configured provider directly. It intentionally does not use
@@ -55,7 +77,10 @@ func Run(ctx context.Context, req Request) error {
 	}
 	binary := req.Binary
 	if binary == "" {
-		binary = "copilot"
+		binary = req.Provider
+		if binary == "" {
+			binary = "codex"
+		}
 	}
 	dir, err := workingDir(req.WorkingDir)
 	if err != nil {

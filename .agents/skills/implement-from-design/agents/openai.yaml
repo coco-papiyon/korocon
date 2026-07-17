@@ -1,0 +1,4 @@
+interface:
+  display_name: "設計結果をもとに実装"
+  short_description: "設計結果から実装内容・テスト結果・残課題を整理する"
+  default_prompt: "Use $implement-from-design to 設計結果をもとに実装内容を日本語で簡潔にまとめてください。"

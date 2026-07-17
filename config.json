@@ -1,0 +1,6 @@
+{
+  "workspaceName": ".workspace",
+  "branchNamePattern": "issue_#<issue番号>",
+  "implementationDirectory": "../",
+  "implementationLoopCount": 3
+}

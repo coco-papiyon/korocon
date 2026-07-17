@@ -1,0 +1,4 @@
+interface:
+  display_name: "PRコンフリクト解消"
+  short_description: "PRのコンフリクトを解消し、修正内容を整理する"
+  default_prompt: "Use $resolve-pr-conflicts to PRのコンフリクト解消結果を日本語で簡潔にまとめてください。"

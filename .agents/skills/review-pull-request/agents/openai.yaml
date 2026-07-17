@@ -1,0 +1,4 @@
+interface:
+  display_name: "PRのレビュー"
+  short_description: "PRレビューで指摘事項を重要度順に整理し、確認事項も明記する"
+  default_prompt: "Use $review-pull-request to PRの指摘事項を重要度順に日本語で整理してください。"

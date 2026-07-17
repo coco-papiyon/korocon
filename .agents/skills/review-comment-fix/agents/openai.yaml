@@ -1,0 +1,4 @@
+interface:
+  display_name: "レビュー指摘の実装"
+  short_description: "レビュー指摘を反映した実装修正版を変更内容・テスト結果・残課題まで整理する"
+  default_prompt: "Use $review-comment-fix to レビュー指摘を反映した実装を日本語で簡潔にまとめてください。"

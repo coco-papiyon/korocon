@@ -1,0 +1,327 @@
+package issue
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+type Phase string
+
+const (
+	PhaseDesign         Phase = "design"
+	PhaseImplementation Phase = "implementation"
+)
+
+const (
+	labelDesignRunning          = "state:design_running"
+	labelDesignReady            = "state:design_ready"
+	labelDesignApproved         = "state:design_approved"
+	labelImplementationRunning  = "state:implementation_running"
+	labelImplementationReady    = "state:implementation_ready"
+	labelImplementationApproved = "state:implementation_approved"
+	labelFailed                 = "state:failed"
+)
+
+var stateLabels = map[string]struct{}{
+	"state:detected": {}, "state:design_running": {}, "state:design_ready": {},
+	"state:design_approved": {}, "state:implementation_running": {},
+	"state:implementation_ready": {}, "state:implementation_approved": {},
+	"state:pr_created": {}, "state:pr_review_comment": {}, "state:pr_conflict": {},
+	"state:pr_conflict_running": {}, "state:pr_conflict_ready": {},
+	"state:pr_conflict_resolved": {}, "state:review_fix_design_running": {},
+	"state:review_fix_design_ready": {}, "state:review_fix_design_approved": {},
+	"state:review_fix_implementation_running":  {},
+	"state:review_fix_implementation_ready":    {},
+	"state:review_fix_implementation_approved": {}, "state:review_fixed": {},
+	"state:review_running": {}, "state:review_ready": {},
+	"state:review_approved": {}, "state:completed": {}, "state:failed": {},
+}
+
+type Label struct {
+	Name string `json:"name"`
+}
+
+type User struct {
+	Login string `json:"login"`
+}
+
+type Comment struct {
+	Author User   `json:"author"`
+	Body   string `json:"body"`
+}
+
+type Issue struct {
+	Number    int       `json:"number"`
+	Title     string    `json:"title"`
+	Body      string    `json:"body"`
+	Labels    []Label   `json:"labels"`
+	Comments  []Comment `json:"comments"`
+	URL       string    `json:"url"`
+	Author    User      `json:"author"`
+	Assignees []User    `json:"assignees"`
+}
+
+type commandRunner interface {
+	Run(context.Context, string, ...string) ([]byte, error)
+}
+
+type ghCommandRunner struct{}
+
+func (ghCommandRunner) Run(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("gh %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
+}
+
+// Workflow manages one selected issue through the same issue state labels as
+// korobokcle. The AI-specific procedure remains owned by repository skills.
+type Workflow struct {
+	dir           string
+	runner        commandRunner
+	Issue         Issue
+	Phase         Phase
+	workspaceName string
+}
+
+func Load(ctx context.Context, workingDir string, number int, workspaceName string) (*Workflow, error) {
+	return load(ctx, workingDir, number, workspaceName, ghCommandRunner{})
+}
+
+func load(ctx context.Context, workingDir string, number int, workspaceName string, runner commandRunner) (*Workflow, error) {
+	if number < 1 {
+		return nil, errors.New("issue number must be greater than zero")
+	}
+	raw, err := runner.Run(ctx, workingDir, "issue", "view", strconv.Itoa(number), "--json", "number,title,body,labels,comments,url,author,assignees")
+	if err != nil {
+		return nil, err
+	}
+	var selected Issue
+	if err := json.Unmarshal(raw, &selected); err != nil {
+		return nil, fmt.Errorf("decode issue #%d: %w", number, err)
+	}
+	phase, err := classify(selected.Labels)
+	if err != nil {
+		return nil, err
+	}
+	return &Workflow{dir: workingDir, runner: runner, Issue: selected, Phase: phase, workspaceName: workspaceName}, nil
+}
+
+func classify(labels []Label) (Phase, error) {
+	has := func(target string) bool {
+		for _, label := range labels {
+			if strings.EqualFold(strings.TrimSpace(label.Name), target) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("state:implementation_ready"):
+		return "", errors.New("issueは実装完了の承認待ちです")
+	case has("state:implementation_approved"), has("state:pr_created"):
+		return "", errors.New("issueの実装工程は完了しています")
+	case has(labelDesignReady):
+		return "", errors.New("issueは設計完了の承認待ちです")
+	case has(labelDesignApproved), has(labelImplementationRunning):
+		return PhaseImplementation, nil
+	default:
+		return PhaseDesign, nil
+	}
+}
+
+func (w *Workflow) Prompt() string {
+	action := "設計"
+	if w.Phase == PhaseImplementation {
+		action = "実装"
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("以下のGitHub Issueの%sを行ってください。", action),
+		"具体的な手順と成果物の形式は、リポジトリで利用可能なスキルの指示に従ってください。",
+		"",
+		"Issue情報:",
+		w.Context(),
+	}, "\n")
+}
+
+func (w *Workflow) SetPhase(phase Phase) {
+	w.Phase = phase
+}
+
+func (w *Workflow) RevisionPrompt(feedback string) string {
+	action := "再設計"
+	if w.Phase == PhaseImplementation {
+		action = "再実装"
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("以下のフィードバックを反映し、GitHub Issueの%sを行ってください。", action),
+		"具体的な手順と成果物の形式は、リポジトリで利用可能なスキルの指示に従ってください。",
+		"",
+		"フィードバック:",
+		strings.TrimSpace(feedback),
+		"",
+		"Issue情報:",
+		w.Context(),
+	}, "\n")
+}
+
+func (w *Workflow) Context() string {
+	lines := []string{
+		fmt.Sprintf("Issue: #%d %s", w.Issue.Number, strings.TrimSpace(w.Issue.Title)),
+		"URL: " + strings.TrimSpace(w.Issue.URL),
+		"Author: " + strings.TrimSpace(w.Issue.Author.Login),
+		"",
+		"Body:",
+		strings.TrimSpace(w.Issue.Body),
+	}
+	if len(w.Issue.Labels) > 0 {
+		labels := make([]string, 0, len(w.Issue.Labels))
+		for _, label := range w.Issue.Labels {
+			labels = append(labels, label.Name)
+		}
+		lines = append(lines, "", "Labels:", strings.Join(labels, ", "))
+	}
+	if len(w.Issue.Comments) > 0 {
+		lines = append(lines, "", "Comments:")
+		for _, comment := range w.Issue.Comments {
+			lines = append(lines, fmt.Sprintf("- %s: %s", comment.Author.Login, strings.TrimSpace(comment.Body)))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (w *Workflow) Start(ctx context.Context) error {
+	label := labelDesignRunning
+	if w.Phase == PhaseImplementation {
+		label = labelImplementationRunning
+	}
+	return w.setStateLabel(ctx, label)
+}
+
+func (w *Workflow) Finish(ctx context.Context, runErr error) error {
+	label := labelFailed
+	if runErr == nil {
+		label = labelDesignReady
+		if w.Phase == PhaseImplementation {
+			label = labelImplementationReady
+		}
+	}
+	return w.setStateLabel(ctx, label)
+}
+
+// SaveResult persists the reviewable artifact using korobokcle's workspace
+// subdirectories, file-name normalization, and top-level heading format.
+func (w *Workflow) SaveResult(result string) (string, error) {
+	path, err := w.artifactPath()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("create artifact directory: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(w.artifactContent(result)), 0o644); err != nil {
+		return "", fmt.Errorf("write artifact: %w", err)
+	}
+	relative, err := filepath.Rel(w.dir, path)
+	if err != nil {
+		return path, nil
+	}
+	return filepath.ToSlash(relative), nil
+}
+
+func (w *Workflow) Approve(ctx context.Context, result string) error {
+	target := labelImplementationApproved
+	if w.Phase == PhaseDesign {
+		body := w.artifactContent(result)
+		if path, err := w.artifactPath(); err == nil {
+			if saved, readErr := os.ReadFile(path); readErr == nil {
+				body = string(saved)
+			}
+		}
+		if _, err := w.runner.Run(ctx, w.dir, "issue", "comment", strconv.Itoa(w.Issue.Number), "--body", body); err != nil {
+			return fmt.Errorf("post design result: %w", err)
+		}
+		target = labelDesignApproved
+	}
+	return w.setStateLabel(ctx, target)
+}
+
+func (w *Workflow) artifactPath() (string, error) {
+	workspaceName := strings.TrimSpace(w.workspaceName)
+	if workspaceName == "" {
+		workspaceName = ".workspace"
+	}
+	if filepath.IsAbs(workspaceName) || strings.ContainsAny(workspaceName, `/\`) || workspaceName == "." || workspaceName == ".." {
+		return "", errors.New("workspace name must be a directory name")
+	}
+	subdir := "design"
+	if w.Phase == PhaseImplementation {
+		subdir = "implementation"
+	}
+	name := fmt.Sprintf("%d_%s.md", w.Issue.Number, sanitizePart(w.Issue.Title))
+	return filepath.Join(w.dir, workspaceName, subdir, name), nil
+}
+
+func (w *Workflow) artifactContent(result string) string {
+	return strings.Join([]string{
+		fmt.Sprintf("# %s", w.Issue.Title),
+		"",
+		stripLeadingH1(result),
+	}, "\n")
+}
+
+func stripLeadingH1(content string) string {
+	trimmed := strings.TrimSpace(content)
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) == 0 || !strings.HasPrefix(strings.TrimSpace(lines[0]), "# ") {
+		return trimmed
+	}
+	return strings.TrimSpace(strings.Join(lines[1:], "\n"))
+}
+
+func sanitizePart(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	replacer := strings.NewReplacer(" ", "-", "/", "-", "\\", "-", ":", "-", "#", "-", ".", "-", ",", "-", "(", "-", ")", "-")
+	value = replacer.Replace(value)
+	return strings.Trim(value, "-")
+}
+
+func (w *Workflow) setStateLabel(ctx context.Context, target string) error {
+	if _, err := w.runner.Run(ctx, w.dir, "label", "create", target, "--color", "0E8A16", "--description", "korobokcle state label", "--force"); err != nil {
+		return fmt.Errorf("ensure label %s: %w", target, err)
+	}
+	raw, err := w.runner.Run(ctx, w.dir, "issue", "view", strconv.Itoa(w.Issue.Number), "--json", "labels")
+	if err != nil {
+		return err
+	}
+	var current struct {
+		Labels []Label `json:"labels"`
+	}
+	if err := json.Unmarshal(raw, &current); err != nil {
+		return fmt.Errorf("decode issue labels: %w", err)
+	}
+	args := []string{"issue", "edit", strconv.Itoa(w.Issue.Number), "--add-label", target}
+	for _, label := range current.Labels {
+		name := strings.TrimSpace(label.Name)
+		if strings.EqualFold(name, target) {
+			continue
+		}
+		if _, ok := stateLabels[strings.ToLower(name)]; ok {
+			args = append(args, "--remove-label", name)
+		}
+	}
+	if _, err := w.runner.Run(ctx, w.dir, args...); err != nil {
+		return fmt.Errorf("update issue state label: %w", err)
+	}
+	return nil
+}

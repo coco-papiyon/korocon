@@ -1,0 +1,4 @@
+interface:
+  display_name: "Issueをもとに設計"
+  short_description: "Issueから要件・画面イメージ・テスト計画を確定する"
+  default_prompt: "Use $design-from-issue to Issueをもとに要件と画面イメージを含む設計結果を日本語でまとめてください。"

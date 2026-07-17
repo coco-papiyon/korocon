@@ -1,0 +1,202 @@
+package issue
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+type fakeRunner struct {
+	responses []string
+	calls     [][]string
+}
+
+func (r *fakeRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
+	r.calls = append(r.calls, append([]string(nil), args...))
+	if len(r.responses) == 0 {
+		return []byte(`{}`), nil
+	}
+	response := r.responses[0]
+	r.responses = r.responses[1:]
+	return []byte(response), nil
+}
+
+func TestLoadBuildsDesignPromptFromIssueContext(t *testing.T) {
+	runner := &fakeRunner{responses: []string{`{
+		"number":42,"title":"add feature","body":"details","url":"https://example/42",
+		"author":{"login":"alice"},"labels":[{"name":"bug"}],
+		"comments":[{"author":{"login":"bob"},"body":"please handle this"}]
+	}`}}
+	workflow, err := load(context.Background(), ".", 42, ".workspace", runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workflow.Phase != PhaseDesign {
+		t.Fatalf("phase = %s", workflow.Phase)
+	}
+	prompt := workflow.Prompt()
+	for _, expected := range []string{"設計を行ってください", "#42 add feature", "details", "bug", "bob: please handle this"} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("prompt does not contain %q:\n%s", expected, prompt)
+		}
+	}
+	if strings.Contains(prompt, "state:design_ready") {
+		t.Fatalf("tool workflow details leaked into AI prompt: %s", prompt)
+	}
+}
+
+func TestLoadSelectsImplementationOnlyAfterDesignApproval(t *testing.T) {
+	runner := &fakeRunner{responses: []string{`{
+		"number":7,"title":"implement","body":"body",
+		"labels":[{"name":"state:design_approved"}]
+	}`}}
+	workflow, err := load(context.Background(), ".", 7, ".workspace", runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workflow.Phase != PhaseImplementation || !strings.Contains(workflow.Prompt(), "実装を行ってください") {
+		t.Fatalf("unexpected implementation workflow: phase=%s prompt=%q", workflow.Phase, workflow.Prompt())
+	}
+}
+
+func TestLoadStopsAtApprovalStates(t *testing.T) {
+	for _, label := range []string{"state:design_ready", "state:implementation_ready", "state:implementation_approved"} {
+		runner := &fakeRunner{responses: []string{`{"number":8,"title":"waiting","labels":[{"name":"` + label + `"}]}`}}
+		if _, err := load(context.Background(), ".", 8, ".workspace", runner); err == nil {
+			t.Fatalf("label %s should not start another workflow", label)
+		}
+	}
+}
+
+func TestWorkflowUpdatesOnlyKnownStateLabels(t *testing.T) {
+	runner := &fakeRunner{responses: []string{
+		`{}`,
+		`{"labels":[{"name":"bug"},{"name":"state:detected"},{"name":"state:custom"}]}`,
+		`{}`,
+	}}
+	workflow := &Workflow{dir: ".", runner: runner, Issue: Issue{Number: 12}, Phase: PhaseDesign}
+	if err := workflow.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 3 {
+		t.Fatalf("calls = %d", len(runner.calls))
+	}
+	edit := strings.Join(runner.calls[2], " ")
+	if !strings.Contains(edit, "--add-label state:design_running") || !strings.Contains(edit, "--remove-label state:detected") {
+		t.Fatalf("unexpected edit command: %s", edit)
+	}
+	if strings.Contains(edit, "bug") || strings.Contains(edit, "state:custom") {
+		t.Fatalf("non-workflow labels were removed: %s", edit)
+	}
+}
+
+func TestWorkflowFinishesWithReadyOrFailedLabel(t *testing.T) {
+	for _, test := range []struct {
+		phase  Phase
+		failed bool
+		want   string
+	}{
+		{PhaseDesign, false, labelDesignReady},
+		{PhaseImplementation, false, labelImplementationReady},
+		{PhaseImplementation, true, labelFailed},
+	} {
+		runner := &fakeRunner{responses: []string{`{}`, `{"labels":[]}`, `{}`}}
+		workflow := &Workflow{dir: ".", runner: runner, Issue: Issue{Number: 13}, Phase: test.phase}
+		var runErr error
+		if test.failed {
+			runErr = context.Canceled
+		}
+		if err := workflow.Finish(context.Background(), runErr); err != nil {
+			t.Fatal(err)
+		}
+		if command := strings.Join(runner.calls[2], " "); !strings.Contains(command, "--add-label "+test.want) {
+			t.Fatalf("phase=%s failed=%v command=%s", test.phase, test.failed, command)
+		}
+	}
+}
+
+func TestRevisionPromptIncludesFeedbackAndIssue(t *testing.T) {
+	workflow := &Workflow{Issue: Issue{Number: 21, Title: "feature", Body: "details"}, Phase: PhaseDesign}
+	prompt := workflow.RevisionPrompt("画面仕様を追加してください")
+	for _, expected := range []string{"再設計", "画面仕様を追加してください", "#21 feature", "details"} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("prompt does not contain %q: %s", expected, prompt)
+		}
+	}
+}
+
+func TestSaveResultUsesKorobokcleWorkspaceLayout(t *testing.T) {
+	dir := t.TempDir()
+	workflow := &Workflow{
+		dir: dir, workspaceName: ".custom-workspace",
+		Issue: Issue{Number: 21, Title: "Add API / UI"}, Phase: PhaseDesign,
+	}
+	path, err := workflow.SaveResult("# Old heading\n\nDesign body\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != ".custom-workspace/design/21_add-api---ui.md" {
+		t.Fatalf("path = %q", path)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "# Add API / UI\n\nDesign body" {
+		t.Fatalf("artifact = %q", raw)
+	}
+}
+
+func TestSaveImplementationResultUsesImplementationDirectory(t *testing.T) {
+	dir := t.TempDir()
+	workflow := &Workflow{
+		dir: dir, workspaceName: ".workspace",
+		Issue: Issue{Number: 31, Title: "Implement feature"}, Phase: PhaseImplementation,
+	}
+	path, err := workflow.SaveResult("implementation result")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != ".workspace/implementation/31_implement-feature.md" {
+		t.Fatalf("path = %q", path)
+	}
+}
+
+func TestApproveDesignPostsResultAndSetsApprovedLabel(t *testing.T) {
+	runner := &fakeRunner{responses: []string{`{}`, `{}`, `{"labels":[{"name":"state:design_ready"}]}`, `{}`}}
+	workflow := &Workflow{dir: t.TempDir(), runner: runner, Issue: Issue{Number: 22, Title: "Design title"}, Phase: PhaseDesign}
+	if _, err := workflow.SaveResult("saved design result"); err != nil {
+		t.Fatal(err)
+	}
+	if err := workflow.Approve(context.Background(), "design result"); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 4 {
+		t.Fatalf("calls = %d", len(runner.calls))
+	}
+	comment := strings.Join(runner.calls[0], " ")
+	if !strings.Contains(comment, "issue comment 22 --body # Design title\n\nsaved design result") {
+		t.Fatalf("unexpected comment command: %q", comment)
+	}
+	edit := strings.Join(runner.calls[3], " ")
+	if !strings.Contains(edit, "--add-label "+labelDesignApproved) || !strings.Contains(edit, "--remove-label "+labelDesignReady) {
+		t.Fatalf("unexpected edit command: %q", edit)
+	}
+}
+
+func TestApproveImplementationSetsApprovedLabel(t *testing.T) {
+	runner := &fakeRunner{responses: []string{`{}`, `{"labels":[{"name":"state:implementation_ready"}]}`, `{}`}}
+	workflow := &Workflow{dir: ".", runner: runner, Issue: Issue{Number: 23}, Phase: PhaseImplementation}
+	if err := workflow.Approve(context.Background(), "implementation result"); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 3 {
+		t.Fatalf("calls = %d", len(runner.calls))
+	}
+	edit := strings.Join(runner.calls[2], " ")
+	if !strings.Contains(edit, "--add-label "+labelImplementationApproved) || !strings.Contains(edit, "--remove-label "+labelImplementationReady) {
+		t.Fatalf("unexpected edit command: %q", edit)
+	}
+}
