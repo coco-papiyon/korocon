@@ -107,6 +107,56 @@ func TestSelectPullRequestDisplaysStatusAndLoadsSelectedNumber(t *testing.T) {
 	}
 }
 
+func TestSelectIssueForImplementerDefaultsToHighestListedIssueWhenInputIsBlank(t *testing.T) {
+	originalIssues, originalLoad := listIssues, loadIssue
+	t.Cleanup(func() { listIssues, loadIssue = originalIssues, originalLoad })
+	listIssues = func(context.Context, string) ([]issueworkflow.Issue, error) {
+		return []issueworkflow.Issue{
+			{Number: 9, Title: "Issue 9"},
+			{Number: 12, Title: "Issue 12", Labels: []issueworkflow.Label{{Name: "state:design_ready"}}},
+			{Number: 7, Title: "Issue 7"},
+		}, nil
+	}
+	loaded := 0
+	loadIssue = func(_ context.Context, _ string, number int, _ string) (*issueworkflow.Workflow, error) {
+		loaded = number
+		return &issueworkflow.Workflow{Issue: issueworkflow.Issue{Number: number, Title: "Selected"}, Phase: issueworkflow.PhaseDesign}, nil
+	}
+
+	selected, err := selectIssueForRole(context.Background(), bufio.NewReader(strings.NewReader("  \n")), io.Discard, ".", ".workspace", selectionModeImplementer, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded != 9 || selected.Issue.Number != 9 {
+		t.Fatalf("loaded=%d selected=%d, want 9", loaded, selected.Issue.Number)
+	}
+}
+
+func TestSelectPullRequestDefaultsToHighestListedPRWhenInputIsBlank(t *testing.T) {
+	originalList, originalLoad := listPullRequests, loadPullRequest
+	t.Cleanup(func() { listPullRequests, loadPullRequest = originalList, originalLoad })
+	listPullRequests = func(context.Context, string) ([]prworkflow.PullRequest, error) {
+		return []prworkflow.PullRequest{
+			{Number: 4, Title: "PR 4", State: "OPEN"},
+			{Number: 9, Title: "PR 9", State: "OPEN"},
+			{Number: 7, Title: "Merged", State: "MERGED"},
+		}, nil
+	}
+	loaded := 0
+	loadPullRequest = func(_ context.Context, _ string, number int, _ string) (*prworkflow.Workflow, error) {
+		loaded = number
+		return &prworkflow.Workflow{PR: prworkflow.PullRequest{Number: number, Title: "Selected", State: "OPEN"}, Phase: prworkflow.PhaseReview}, nil
+	}
+
+	selected, err := selectPullRequest(context.Background(), bufio.NewReader(strings.NewReader(" \t\n")), io.Discard, ".", ".workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded != 9 || selected.PR.Number != 9 {
+		t.Fatalf("loaded=%d selected=%d, want 9", loaded, selected.PR.Number)
+	}
+}
+
 func TestGitHubInformationSelectionAcceptsCaseInsensitiveShortcutsAndDefaultsToIssue(t *testing.T) {
 	originalLoadIssue := loadIssue
 	originalListPRs, originalLoadPR := listPullRequests, loadPullRequest

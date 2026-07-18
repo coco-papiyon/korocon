@@ -684,9 +684,13 @@ func selectIssueForRole(ctx context.Context, reader *bufio.Reader, out io.Writer
 	if err != nil && len(numberText) == 0 {
 		return nil, fmt.Errorf("Issue番号を読み取れません: %w", err)
 	}
-	number, err := strconv.Atoi(strings.TrimSpace(numberText))
-	if err != nil || number < 1 {
-		return nil, fmt.Errorf("Issue番号が不正です: %q", strings.TrimSpace(numberText))
+	numberText = strings.TrimSpace(numberText)
+	number := issues[0].Number
+	if numberText != "" {
+		number, err = strconv.Atoi(numberText)
+		if err != nil || number < 1 {
+			return nil, fmt.Errorf("Issue番号が不正です: %q", numberText)
+		}
 	}
 	selected, err := loadIssue(ctx, workingDir, number, workspaceName)
 	if err != nil {
@@ -973,9 +977,13 @@ func selectPullRequestForRole(ctx context.Context, reader *bufio.Reader, out io.
 	if err != nil && len(numberText) == 0 {
 		return nil, fmt.Errorf("PR番号を読み取れません: %w", err)
 	}
-	number, err := strconv.Atoi(strings.TrimSpace(numberText))
-	if err != nil || number < 1 {
-		return nil, fmt.Errorf("PR番号が不正です: %q", strings.TrimSpace(numberText))
+	numberText = strings.TrimSpace(numberText)
+	number := prs[0].Number
+	if numberText != "" {
+		number, err = strconv.Atoi(numberText)
+		if err != nil || number < 1 {
+			return nil, fmt.Errorf("PR番号が不正です: %q", numberText)
+		}
 	}
 	selected, err := loadPullRequest(ctx, workingDir, number, workspaceName)
 	if err != nil {
