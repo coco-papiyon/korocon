@@ -23,6 +23,7 @@ go build -o ./korocon ./cmd/korocon
   "branchNamePattern": "issue_#<issue番号>",
   "implementationDirectory": "../<リポジトリ名>-branches/",
   "implementationLoopCount": 3,
+  "autoPollingInterval": "5m",
   "baseBranch": "main",
   "implementerProvider": "codex",
   "implementerModel": "gpt-5.6-luna",

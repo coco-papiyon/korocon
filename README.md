@@ -26,6 +26,7 @@ korocon config allow "go test ./..."
   "branchNamePattern": "issue_#<issue番号>",
   "implementationDirectory": "../<リポジトリ名>-branches/",
   "implementationLoopCount": 3,
+  "autoPollingInterval": "5m",
   "baseBranch": "main",
   "implementerProvider": "codex",
   "implementerModel": "gpt-5.6-luna",
@@ -53,7 +54,7 @@ korocon config allow "go test ./..."
 
 レビュー指摘修正PRを選択すると、PRの一般コメント・レビュー本文・行単位レビューコメントを`.workspace/review_fix/`へ保存して表示します。未入力Enterでは保存内容をそのまま修正し、文字入力では修正対象・修正不要対象を指定できます。その後、実装者と検証者が実装・検証を既定3回まで繰り返し、回数別の結果を同ディレクトリへ保存します。
 
-`--auto`を追加すると、フィルタに一致する対象を一覧の上から順番に処理します。各処理の完了後に一覧を再取得し、次の対象へ進みます。実装者モードではIssueを優先し、対象Issueがない場合だけPRを処理します。`--auto`には`-i`または`-r`が必要です。
+`--auto`を追加すると、フィルタに一致する対象を一覧の上から順番に処理します。各処理の完了後に一覧を再取得し、次の対象へ進みます。対象がない場合は`autoPollingInterval`（既定`5m`）だけ待機して再取得します。待機中もCtrl+Cで終了できます。実装者モードではIssueを優先し、対象Issueがない場合だけPRを処理します。`--auto`には`-i`または`-r`が必要です。
 
 ```sh
 go run ./cmd/korocon -i --auto

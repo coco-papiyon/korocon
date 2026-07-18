@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	issueworkflow "github.com/coco-papiyon/korocon/internal/issue"
 	prworkflow "github.com/coco-papiyon/korocon/internal/pullrequest"
@@ -397,6 +398,24 @@ func TestRunInteractiveRejectsShortRoleModesTogether(t *testing.T) {
 func TestRunInteractiveRequiresRoleForAutoMode(t *testing.T) {
 	err := runInteractive([]string{"--auto"}, strings.NewReader(""), io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "requires --implementer") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestWaitForAutoPollingWaitsAndDisplaysNextFetch(t *testing.T) {
+	var out strings.Builder
+	if err := waitForAutoPolling(context.Background(), &out, "5m", time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "フィルタに一致する自動処理対象がありません。5m後に再取得します。") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestWaitForAutoPollingStopsOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := waitForAutoPolling(ctx, io.Discard, "5m", time.Hour); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v", err)
 	}
 }

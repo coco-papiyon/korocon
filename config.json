@@ -3,6 +3,7 @@
   "branchNamePattern": "issue_#<issue番号>",
   "implementationDirectory": "../<リポジトリ名>-branches/",
   "implementationLoopCount": 3,
+  "autoPollingInterval": "5m",
   "baseBranch": "main",
   "builtinAllowedCommands": [
     "npm install", "npm ci", "npm test",

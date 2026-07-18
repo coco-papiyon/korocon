@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -23,11 +24,41 @@ func TestLoadFileUsesDefaultWhenMissing(t *testing.T) {
 	if configured.BaseBranch != "main" {
 		t.Fatalf("baseBranch = %q", configured.BaseBranch)
 	}
+	if configured.AutoPollingInterval != "5m" {
+		t.Fatalf("autoPollingInterval = %q", configured.AutoPollingInterval)
+	}
 	if !reflect.DeepEqual(configured.BuiltinAllowedCommands, DefaultAllowedCommands()) {
 		t.Fatalf("builtinAllowedCommands = %+v", configured.BuiltinAllowedCommands)
 	}
 	if configured.ImplementerProvider != "codex" || configured.ImplementerModel != "gpt-5.6-luna" || configured.VerifierProvider != "" || configured.ReviewerProvider != "" {
 		t.Fatalf("role defaults = %+v", configured)
+	}
+}
+
+func TestLoadFileReadsAutoPollingInterval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, []byte(`{"autoPollingInterval":"30s"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configured, err := loadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured.AutoPollingInterval != "30s" {
+		t.Fatalf("autoPollingInterval = %q", configured.AutoPollingInterval)
+	}
+}
+
+func TestLoadFileRejectsInvalidAutoPollingInterval(t *testing.T) {
+	for _, value := range []string{"invalid", "0s", "-1m"} {
+		path := filepath.Join(t.TempDir(), FileName)
+		content := []byte(fmt.Sprintf(`{"autoPollingInterval":%q}`, value))
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadFile(path); err == nil || !strings.Contains(err.Error(), "autoPollingInterval") {
+			t.Fatalf("value %q error = %v", value, err)
+		}
 	}
 }
 

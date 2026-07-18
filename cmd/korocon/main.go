@@ -17,6 +17,7 @@ import (
 	"strings"
 	"syscall"
 	"text/tabwriter"
+	"time"
 
 	appconfig "github.com/coco-papiyon/korocon/internal/config"
 	"github.com/coco-papiyon/korocon/internal/daemon"
@@ -252,7 +253,11 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 	if githubReviewer == "" {
 		githubReviewer = "未設定"
 	}
-	fmt.Fprintf(stderr, "mode: %s\nimplementer: %s / %s / %s\nverifier: %s / %s / %s\nreviewer: %s / %s / %s\ngithub reviewer: %s\nconfig: %s\nworkspace: %s\nbranch: %s\nbase branch: %s\nimplementation directory: %s\nimplementation loops: %d\nstartup command: %s\nauto-approved commands: %d\nlog: %s\n", mode, implementer.Provider, implementer.Model, aiBinaryName(implementer), verifier.Provider, verifier.Model, aiBinaryName(verifier), reviewer.Provider, reviewer.Model, aiBinaryName(reviewer), githubReviewer, configPath, configured.WorkspaceName, configured.BranchNamePattern, configured.BaseBranch, configured.ImplementationDirectory, configured.ImplementationLoopCount, startupCommand, len(configured.BuiltinAllowedCommands), *logPath)
+	autoPollingInterval, err := time.ParseDuration(configured.AutoPollingInterval)
+	if err != nil {
+		return fmt.Errorf("auto polling interval: %w", err)
+	}
+	fmt.Fprintf(stderr, "mode: %s\nimplementer: %s / %s / %s\nverifier: %s / %s / %s\nreviewer: %s / %s / %s\ngithub reviewer: %s\nconfig: %s\nworkspace: %s\nbranch: %s\nbase branch: %s\nimplementation directory: %s\nimplementation loops: %d\nauto polling interval: %s\nstartup command: %s\nauto-approved commands: %d\nlog: %s\n", mode, implementer.Provider, implementer.Model, aiBinaryName(implementer), verifier.Provider, verifier.Model, aiBinaryName(verifier), reviewer.Provider, reviewer.Model, aiBinaryName(reviewer), githubReviewer, configPath, configured.WorkspaceName, configured.BranchNamePattern, configured.BaseBranch, configured.ImplementationDirectory, configured.ImplementationLoopCount, configured.AutoPollingInterval, startupCommand, len(configured.BuiltinAllowedCommands), *logPath)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	selectionInput := in
@@ -275,8 +280,13 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 		if *autoMode {
 			selectedIssue, selectedPR, err = selectAutoGitHubInformation(ctx, stdout, *dir, configured.WorkspaceName, mode, assigneeFilter, activeFilters)
 			if errors.Is(err, errNoAutoTargets) {
-				_, writeErr := fmt.Fprintln(stdout, "フィルタに一致する自動処理対象がありません。")
-				return writeErr
+				if waitErr := waitForAutoPolling(ctx, stdout, configured.AutoPollingInterval, autoPollingInterval); waitErr != nil {
+					if errors.Is(waitErr, context.Canceled) {
+						return nil
+					}
+					return waitErr
+				}
+				continue
 			}
 		} else if requested.issueSpecified || requested.prSpecified {
 			selectedIssue, selectedPR, err = selectRequestedGitHubInformationWithFilters(ctx, stdout, *dir, configured.WorkspaceName, requested, assigneeFilter, activeFilters)
@@ -437,6 +447,20 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 			return nil
 		}
 		return err
+	}
+}
+
+func waitForAutoPolling(ctx context.Context, out io.Writer, displayInterval string, interval time.Duration) error {
+	if _, err := fmt.Fprintf(out, "フィルタに一致する自動処理対象がありません。%s後に再取得します。\n", displayInterval); err != nil {
+		return err
+	}
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 

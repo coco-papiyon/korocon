@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const FileName = "config.json"
@@ -19,6 +20,7 @@ type Config struct {
 	BranchNamePattern       string   `json:"branchNamePattern"`
 	ImplementationDirectory string   `json:"implementationDirectory"`
 	ImplementationLoopCount int      `json:"implementationLoopCount"`
+	AutoPollingInterval     string   `json:"autoPollingInterval"`
 	BaseBranch              string   `json:"baseBranch"`
 	StartupCommand          string   `json:"startupCommand,omitempty"`
 	BuiltinAllowedCommands  []string `json:"builtinAllowedCommands"`
@@ -42,7 +44,8 @@ var defaultAllowedCommands = []string{
 func Default() Config {
 	return Config{
 		WorkspaceName: ".workspace", BranchNamePattern: "issue_#<issue番号>",
-		ImplementationDirectory: defaultImplementationDirectory, ImplementationLoopCount: 3, BaseBranch: "main",
+		ImplementationDirectory: defaultImplementationDirectory, ImplementationLoopCount: 3,
+		AutoPollingInterval: "5m", BaseBranch: "main",
 		BuiltinAllowedCommands: DefaultAllowedCommands(),
 		ImplementerProvider:    "codex", ImplementerModel: "gpt-5.6-luna",
 	}
@@ -130,6 +133,14 @@ func loadFile(path string) (Config, error) {
 	}
 	if configured.ImplementationLoopCount > 10 {
 		configured.ImplementationLoopCount = 10
+	}
+	configured.AutoPollingInterval = strings.TrimSpace(configured.AutoPollingInterval)
+	if configured.AutoPollingInterval == "" {
+		configured.AutoPollingInterval = "5m"
+	}
+	interval, err := time.ParseDuration(configured.AutoPollingInterval)
+	if err != nil || interval <= 0 {
+		return Config{}, fmt.Errorf("config autoPollingInterval: must be a positive duration: %q", configured.AutoPollingInterval)
 	}
 	configured.BaseBranch = strings.TrimSpace(configured.BaseBranch)
 	if configured.BaseBranch == "" {
