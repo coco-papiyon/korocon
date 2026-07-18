@@ -326,6 +326,18 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		_, writeErr := io.WriteString(displayOut, output)
 		return writeErr
 	}
+	handleFinishError := func(id uint64, err error) bool {
+		if err == nil {
+			return false
+		}
+		if errors.Is(err, ErrRestart) {
+			restartRequested.Store(true)
+			cancel()
+			return true
+		}
+		_ = writeResult(id, "", err)
+		return false
+	}
 
 	var residentJobs chan residentJob
 	var closeResidentJobs sync.Once
@@ -404,8 +416,8 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				_ = writeResult(job.id, "", err)
 				status("\r\033[2K[job %d] 失敗\n", displayID)
 				if cfg.OnJobFinish != nil {
-					if finishErr := cfg.OnJobFinish(ctx, job.id, job.prompt, "", err); finishErr != nil {
-						_ = writeResult(job.id, "", finishErr)
+					if handleFinishError(job.id, cfg.OnJobFinish(ctx, job.id, job.prompt, "", err)) {
+						continue
 					}
 				}
 				promptMark()
@@ -423,8 +435,8 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				}
 			}
 			if cfg.OnJobFinish != nil {
-				if finishErr := cfg.OnJobFinish(ctx, job.id, job.prompt, result.Text, nil); finishErr != nil {
-					_ = writeResult(job.id, "", finishErr)
+				if handleFinishError(job.id, cfg.OnJobFinish(ctx, job.id, job.prompt, result.Text, nil)) {
+					continue
 				}
 			}
 			promptMark()
@@ -527,16 +539,16 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 						_, _ = io.WriteString(displayOut, streamedResult.String())
 					}
 					if cfg.OnJobFinish != nil {
-						if finishErr := cfg.OnJobFinish(ctx, id, prompt, streamedResult.String(), nil); finishErr != nil {
-							_ = writeResult(id, "", finishErr)
+						if handleFinishError(id, cfg.OnJobFinish(ctx, id, prompt, streamedResult.String(), nil)) {
+							return
 						}
 					}
 					promptMark()
 				} else {
 					status("\r\033[2K[job %d] 失敗\n", id)
 					if cfg.OnJobFinish != nil {
-						if finishErr := cfg.OnJobFinish(ctx, id, prompt, "", err); finishErr != nil {
-							_ = writeResult(id, "", finishErr)
+						if handleFinishError(id, cfg.OnJobFinish(ctx, id, prompt, "", err)) {
+							return
 						}
 					}
 					promptMark()
@@ -557,8 +569,8 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				if err != nil {
 					result = ""
 				}
-				if finishErr := cfg.OnJobFinish(ctx, id, prompt, result, err); finishErr != nil {
-					_ = writeResult(id, "", finishErr)
+				if handleFinishError(id, cfg.OnJobFinish(ctx, id, prompt, result, err)) {
+					return
 				}
 			}
 			promptMark()
@@ -667,6 +679,9 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			if result.err != nil {
 				stopResidentJobs()
 				wg.Wait()
+				if restartRequested.Load() {
+					return ErrRestart
+				}
 				if errors.Is(result.err, io.EOF) {
 					return nil
 				}

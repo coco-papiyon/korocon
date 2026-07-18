@@ -210,6 +210,21 @@ func TestResolveAISelectionRejectsUnsupportedProvider(t *testing.T) {
 	}
 }
 
+func TestPullRequestAIUsesSeparateRoleByPhase(t *testing.T) {
+	implementer := aiSelection{Provider: "codex", Model: "implementer"}
+	reviewer := aiSelection{Provider: "copilot", Model: "reviewer"}
+	for _, phase := range []prworkflow.Phase{prworkflow.PhaseFix, prworkflow.PhaseConflict} {
+		if got := pullRequestAI(phase, implementer, reviewer); got != implementer {
+			t.Fatalf("phase %q AI = %+v, want implementer", phase, got)
+		}
+	}
+	for _, phase := range []prworkflow.Phase{prworkflow.PhaseReview, prworkflow.PhaseVerification} {
+		if got := pullRequestAI(phase, implementer, reviewer); got != reviewer {
+			t.Fatalf("phase %q AI = %+v, want reviewer", phase, got)
+		}
+	}
+}
+
 func TestRunInteractiveDisplaysRoleAISelectionsFromFlags(t *testing.T) {
 	original := loadIssue
 	t.Cleanup(func() { loadIssue = original })

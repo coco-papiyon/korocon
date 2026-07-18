@@ -125,6 +125,39 @@ func TestPRReviewRerunAndFixInstruction(t *testing.T) {
 	}
 }
 
+func TestPRReviewFindingsAutomaticallyReturnToSelection(t *testing.T) {
+	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
+	var out bytes.Buffer
+	controller := newPRReviewController(workflow, &out, nil, nil, nil, nil, nil)
+	if err := controller.OnJobStart(context.Background(), 1, workflow.Prompt()); err != nil {
+		t.Fatal(err)
+	}
+	result := "## 結果\n\n要修正\n\n## 指摘事項\n- 修正してください"
+	err := controller.OnJobFinish(context.Background(), 1, workflow.Prompt(), result, nil)
+	if !errors.Is(err, daemon.ErrRestart) {
+		t.Fatalf("error = %v, want ErrRestart", err)
+	}
+	if !strings.Contains(workflow.changes, "修正してください") || !strings.Contains(out.String(), "Issue/PR選択へ戻ります") {
+		t.Fatalf("workflow=%+v output=%q", workflow, out.String())
+	}
+}
+
+func TestReviewRequiresChanges(t *testing.T) {
+	for _, test := range []struct {
+		result string
+		want   bool
+	}{
+		{"## 結果\n問題なし", false},
+		{"## 結果\n要修正", true},
+		{"## 結果\n**コメントあり**", true},
+		{"## 概要\n要修正", false},
+	} {
+		if got := reviewRequiresChanges(test.result); got != test.want {
+			t.Fatalf("reviewRequiresChanges(%q) = %t, want %t", test.result, got, test.want)
+		}
+	}
+}
+
 func TestPRReviewApprovalWithoutStartupCommandReturnsToSelection(t *testing.T) {
 	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
 	var out bytes.Buffer

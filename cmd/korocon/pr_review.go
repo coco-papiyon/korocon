@@ -118,6 +118,14 @@ func (c *prReviewController) OnJobFinish(ctx context.Context, id uint64, _ strin
 	if runErr != nil {
 		return nil
 	}
+	if c.workflow.CurrentPhase() == prworkflow.PhaseReview && reviewRequiresChanges(result) {
+		instruction := "レビュー結果に記載された指摘事項を修正してください。"
+		if err := c.workflow.RequestChanges(ctx, result, instruction); err != nil {
+			return err
+		}
+		_, err := fmt.Fprintln(c.out, "レビューで指摘が見つかりました。レビュー結果をPRへ登録し、Issue/PR選択へ戻ります。")
+		return errors.Join(err, daemon.ErrRestart)
+	}
 	c.mu.Lock()
 	c.pending, c.result = true, result
 	phase := "レビュー"
@@ -134,6 +142,26 @@ func (c *prReviewController) OnJobFinish(ctx context.Context, id uint64, _ strin
 	}
 	c.mu.Unlock()
 	return err
+}
+
+func reviewRequiresChanges(result string) bool {
+	lines := strings.Split(strings.ReplaceAll(result, "\r\n", "\n"), "\n")
+	for i, line := range lines {
+		if !strings.EqualFold(strings.TrimSpace(line), "## 結果") {
+			continue
+		}
+		for _, value := range lines[i+1:] {
+			value = strings.Trim(strings.TrimSpace(value), "*_` ")
+			if value == "" {
+				continue
+			}
+			if strings.HasPrefix(value, "#") {
+				return false
+			}
+			return strings.Contains(value, "要修正") || strings.Contains(value, "コメントあり")
+		}
+	}
+	return false
 }
 
 func (c *prReviewController) HandleInput(ctx context.Context, input string) (daemon.InputAction, error) {

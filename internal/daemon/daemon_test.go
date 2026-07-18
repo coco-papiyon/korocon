@@ -159,6 +159,18 @@ func TestRunReturnsRestartWhenInputHandlerRequestsSelectionRestart(t *testing.T)
 	}
 }
 
+func TestRunReturnsRestartWhenFinishHookRequestsSelectionRestart(t *testing.T) {
+	err := Run(context.Background(), strings.NewReader(""), &strings.Builder{}, Config{
+		Provider: "copilot", Binary: "/bin/echo", InitialPrompt: "review PR",
+		OnJobFinish: func(context.Context, uint64, string, string, error) error {
+			return ErrRestart
+		},
+	})
+	if !errors.Is(err, ErrRestart) {
+		t.Fatalf("Run() error = %v, want ErrRestart", err)
+	}
+}
+
 func TestRunRestartLeavesFollowingBufferedInput(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader("restart\nissue\n"))
 	err := Run(context.Background(), reader, &strings.Builder{}, Config{

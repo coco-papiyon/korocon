@@ -173,8 +173,8 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 		}
 		err = func() error {
 			activeAI := implementer
-			if selectedPR != nil && selectedPR.Phase == prworkflow.PhaseReview {
-				activeAI = reviewer
+			if selectedPR != nil {
+				activeAI = pullRequestAI(selectedPR.Phase, implementer, reviewer)
 			}
 			initialPrompt := ""
 			var initialJob *daemon.JobSpec
@@ -527,6 +527,13 @@ func pullRequestPhaseName(phase prworkflow.Phase) string {
 	default:
 		return "レビュー"
 	}
+}
+
+func pullRequestAI(phase prworkflow.Phase, implementer, reviewer aiSelection) aiSelection {
+	if phase == prworkflow.PhaseReview || phase == prworkflow.PhaseVerification {
+		return reviewer
+	}
+	return implementer
 }
 
 var pullRequestStateNames = map[string]string{
