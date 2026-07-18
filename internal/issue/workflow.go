@@ -166,6 +166,10 @@ func (w *Workflow) Prompt() string {
 	}, "\n")
 }
 
+func (w *Workflow) IssueNumber() int {
+	return w.Issue.Number
+}
+
 func (w *Workflow) SetPhase(phase Phase) {
 	w.Phase = phase
 }

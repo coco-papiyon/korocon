@@ -13,6 +13,7 @@ import (
 )
 
 type reviewWorkflow interface {
+	IssueNumber() int
 	Prompt() string
 	RevisionPrompt(string) string
 	Start(context.Context) error
@@ -75,6 +76,10 @@ func (c *issueReviewController) OnJobStart(ctx context.Context, id uint64, promp
 		delete(c.jobs, id)
 		c.prompts[prompt]++
 		c.mu.Unlock()
+		return err
+	}
+	phase, _ := c.phaseNames()
+	if _, err := fmt.Fprintf(c.out, "Issue #%dの%sを開始します。\n---\n", c.workflow.IssueNumber(), phase); err != nil {
 		return err
 	}
 	return nil

@@ -12,6 +12,7 @@ import (
 )
 
 type fakeReviewWorkflow struct {
+	number       int
 	prompt       string
 	started      int
 	finished     int
@@ -21,16 +22,18 @@ type fakeReviewWorkflow struct {
 	revisions    []string
 	savedResults []string
 	phase        issueworkflow.Phase
+	startErr     error
 }
 
-func (w *fakeReviewWorkflow) Prompt() string { return w.prompt }
+func (w *fakeReviewWorkflow) IssueNumber() int { return w.number }
+func (w *fakeReviewWorkflow) Prompt() string   { return w.prompt }
 func (w *fakeReviewWorkflow) RevisionPrompt(feedback string) string {
 	w.revisions = append(w.revisions, feedback)
 	return "revision: " + feedback
 }
 func (w *fakeReviewWorkflow) Start(context.Context) error {
 	w.started++
-	return nil
+	return w.startErr
 }
 
 func (w *fakeReviewWorkflow) Finish(_ context.Context, err error) error {
@@ -50,7 +53,7 @@ func (w *fakeReviewWorkflow) Approve(_ context.Context, result string) (string, 
 func (w *fakeReviewWorkflow) SetPhase(phase issueworkflow.Phase) { w.phase = phase }
 
 func TestIssueReviewApprovesEmptyInput(t *testing.T) {
-	workflow := &fakeReviewWorkflow{prompt: "design"}
+	workflow := &fakeReviewWorkflow{number: 2, prompt: "design"}
 	var out bytes.Buffer
 	controller := newIssueReviewController(workflow, issueworkflow.PhaseDesign, &out, func(prompt string) *daemon.JobSpec {
 		return &daemon.JobSpec{Prompt: prompt}
@@ -73,10 +76,16 @@ func TestIssueReviewApprovesEmptyInput(t *testing.T) {
 		!strings.Contains(out.String(), "設計を承認しました") {
 		t.Fatalf("unexpected output: %q", out.String())
 	}
+	if strings.Count(out.String(), "Issue #2の設計を開始します。\n---\n") != 1 {
+		t.Fatalf("unexpected design start message: %q", out.String())
+	}
+	if strings.Contains(out.String(), "Issue #2の実装を開始します。") {
+		t.Fatalf("implementation start message was printed before implementation job started: %q", out.String())
+	}
 }
 
 func TestIssueReviewImplementationApprovalClosesSessions(t *testing.T) {
-	workflow := &fakeReviewWorkflow{prompt: "implement", approvedURL: "https://github.com/acme/repo/pull/1"}
+	workflow := &fakeReviewWorkflow{number: 2, prompt: "implement", approvedURL: "https://github.com/acme/repo/pull/1"}
 	closed := 0
 	var out bytes.Buffer
 	controller := newIssueReviewController(workflow, issueworkflow.PhaseImplementation, &out, func(prompt string) *daemon.JobSpec {
@@ -101,10 +110,13 @@ func TestIssueReviewImplementationApprovalClosesSessions(t *testing.T) {
 	if !strings.Contains(out.String(), "PRを作成しました: https://github.com/acme/repo/pull/1") {
 		t.Fatalf("unexpected output: %q", out.String())
 	}
+	if strings.Count(out.String(), "Issue #2の実装を開始します。\n---\n") != 1 {
+		t.Fatalf("unexpected implementation start message: %q", out.String())
+	}
 }
 
 func TestIssueReviewImplementationApprovalFailureKeepsSessionsAndPendingState(t *testing.T) {
-	workflow := &fakeReviewWorkflow{prompt: "implement", approveErr: errors.New("push failed")}
+	workflow := &fakeReviewWorkflow{number: 2, prompt: "implement", approveErr: errors.New("push failed")}
 	closed := 0
 	controller := newIssueReviewController(workflow, issueworkflow.PhaseImplementation, &bytes.Buffer{}, nil, func() error {
 		closed++
@@ -131,7 +143,7 @@ func TestIssueReviewImplementationApprovalFailureKeepsSessionsAndPendingState(t 
 }
 
 func TestIssueReviewFeedbackStartsTrackedRevision(t *testing.T) {
-	workflow := &fakeReviewWorkflow{prompt: "implement"}
+	workflow := &fakeReviewWorkflow{number: 2, prompt: "implement"}
 	var out bytes.Buffer
 	controller := newIssueReviewController(workflow, issueworkflow.PhaseImplementation, &out, func(prompt string) *daemon.JobSpec {
 		return &daemon.JobSpec{Prompt: prompt}
@@ -158,10 +170,13 @@ func TestIssueReviewFeedbackStartsTrackedRevision(t *testing.T) {
 	if !strings.Contains(out.String(), "再実装") {
 		t.Fatalf("unexpected output: %q", out.String())
 	}
+	if strings.Count(out.String(), "Issue #2の実装を開始します。\n---\n") != 2 {
+		t.Fatalf("unexpected implementation start messages: %q", out.String())
+	}
 }
 
 func TestIssueReviewDoesNotPromptAfterFailedJob(t *testing.T) {
-	workflow := &fakeReviewWorkflow{prompt: "design"}
+	workflow := &fakeReviewWorkflow{number: 2, prompt: "design"}
 	controller := newIssueReviewController(workflow, issueworkflow.PhaseDesign, &bytes.Buffer{}, nil, nil)
 	if err := controller.OnJobStart(context.Background(), 1, "design"); err != nil {
 		t.Fatal(err)
@@ -175,6 +190,18 @@ func TestIssueReviewDoesNotPromptAfterFailedJob(t *testing.T) {
 	}
 	if action.Handled {
 		t.Fatal("failed job entered approval state")
+	}
+}
+
+func TestIssueReviewDoesNotPrintStartMessageWhenWorkflowStartFails(t *testing.T) {
+	workflow := &fakeReviewWorkflow{number: 2, prompt: "design", startErr: errors.New("label update failed")}
+	var out bytes.Buffer
+	controller := newIssueReviewController(workflow, issueworkflow.PhaseDesign, &out, nil, nil)
+	if err := controller.OnJobStart(context.Background(), 1, "design"); err == nil {
+		t.Fatal("expected start error")
+	}
+	if strings.Contains(out.String(), "Issue #2の設計を開始します。") || strings.Contains(out.String(), "---") {
+		t.Fatalf("start message was printed after failed workflow start: %q", out.String())
 	}
 }
 
