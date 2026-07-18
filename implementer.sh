@@ -1,3 +1,3 @@
 #!/bin/bash
 
-go run ./cmd/korocon/ --implementer
+go run ./cmd/korocon/ --implementer $@

@@ -111,6 +111,21 @@ func TestPRFixRunsAsSeparateJobAndReturnsToSelectionAfterApproval(t *testing.T) 
 	}
 }
 
+func TestPRFixEmptyInputStartsWithSavedFeedback(t *testing.T) {
+	workflow := &fakePRWorkflow{phase: prworkflow.PhaseFix}
+	var out bytes.Buffer
+	controller := newPRReviewController(workflow, &out, func(prompt string) *daemon.JobSpec {
+		return &daemon.JobSpec{Prompt: prompt}
+	}, nil, nil, nil, nil)
+	action, err := controller.HandleInput(context.Background(), "")
+	if err != nil || !action.Handled || action.Job == nil || action.Job.Prompt != "fix: " {
+		t.Fatalf("action=%+v err=%v", action, err)
+	}
+	if !strings.Contains(out.String(), "保存済みのレビュー指摘内容を使用して") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
 func TestPRReviewRerunAndFixInstruction(t *testing.T) {
 	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
 	controller := newPRReviewController(workflow, &bytes.Buffer{}, func(prompt string) *daemon.JobSpec { return &daemon.JobSpec{Prompt: prompt} }, nil, nil, nil, nil)

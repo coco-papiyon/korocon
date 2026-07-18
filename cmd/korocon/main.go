@@ -339,7 +339,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 					if err != nil {
 						return fmt.Errorf("レビュー指摘内容の取得に失敗しました: %w", err)
 					}
-					if _, err := fmt.Fprintf(stderr, "\n---\n\n%s\n保存先: %s\n\nレビュー指摘内容を確認し、修正する指摘と修正不要な指摘を入力してください。\n", strings.TrimSpace(feedback), feedbackPath); err != nil {
+					if _, err := fmt.Fprintf(stderr, "\n---\n\n%s\n保存先: %s\n\nレビュー指摘内容を確認してください。すべて修正する場合は未入力状態でEnter、修正対象を選ぶ場合は修正する指摘と修正不要な指摘を入力してください。\n", strings.TrimSpace(feedback), feedbackPath); err != nil {
 						return err
 					}
 				}

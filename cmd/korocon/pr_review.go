@@ -204,14 +204,14 @@ func (c *prReviewController) HandleInput(ctx context.Context, input string) (dae
 	}
 	if c.workflow.CurrentPhase() == prworkflow.PhaseFix && c.awaitingFixInput {
 		instruction := strings.TrimSpace(input)
-		if instruction == "" {
-			_, err := fmt.Fprintln(c.out, "レビュー指摘内容を確認し、修正する指摘と修正不要な指摘を入力してください。")
-			return daemon.InputAction{Handled: true}, err
-		}
 		c.mu.Lock()
 		c.awaitingFixInput = false
 		c.mu.Unlock()
-		return c.enqueue(c.workflow.FixPrompt(instruction), true, "修正指示をAIへ送信し、実装・検証を開始します。")
+		message := "修正指示をAIへ送信し、実装・検証を開始します。"
+		if instruction == "" {
+			message = "保存済みのレビュー指摘内容を使用して、実装・検証を開始します。"
+		}
+		return c.enqueue(c.workflow.FixPrompt(instruction), true, message)
 	}
 	if !pending {
 		return daemon.InputAction{}, nil
