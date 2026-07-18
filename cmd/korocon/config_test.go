@@ -23,7 +23,7 @@ func TestInitializeConfigPromptsSettingsAndModels(t *testing.T) {
 		"inherit",
 		"inherit",
 		"copilot",
-		"6",
+		"1",
 	}, "\n") + "\n"
 	var out strings.Builder
 	if err := initializeConfig(strings.NewReader(input), &out, path, false); err != nil {
@@ -40,13 +40,32 @@ func TestInitializeConfigPromptsSettingsAndModels(t *testing.T) {
 	if configured.VerifierProvider != "" || configured.VerifierModel != "" {
 		t.Fatalf("verifier settings = %+v", configured)
 	}
-	if configured.ReviewerProvider != "copilot" || configured.ReviewerModel != "gpt-5.4-mini" {
+	if configured.ReviewerProvider != "copilot" || configured.ReviewerModel != "auto" {
 		t.Fatalf("reviewer settings = %+v", configured)
 	}
 	for _, prompt := range []string{"baseBranch [main]:", "branchNamePattern [issue_#<issue番号>]:", "startupCommand [未設定]:", "実装者Provider", "検証者Model", "レビューアModel"} {
 		if !strings.Contains(out.String(), prompt) {
 			t.Fatalf("output does not contain %q: %q", prompt, out.String())
 		}
+	}
+}
+
+func TestConfigureModelsUsesAutoWhenImplementerChangesToCopilot(t *testing.T) {
+	configured := appconfig.Default()
+	input := strings.Join([]string{"copilot", "", "", "", "", ""}, "\n") + "\n"
+	var out strings.Builder
+	got, err := configureModels(bufio.NewReader(strings.NewReader(input)), &out, configured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ImplementerProvider != "copilot" || got.ImplementerModel != "auto" {
+		t.Fatalf("implementer settings = %+v", got)
+	}
+	if !strings.Contains(out.String(), "実装者で選択可能なモデル (provider: copilot):\n1. auto") {
+		t.Fatalf("output = %q", out.String())
+	}
+	if strings.Contains(out.String(), "gpt-5.6-sol") {
+		t.Fatalf("Codex models were displayed for Copilot: %q", out.String())
 	}
 }
 

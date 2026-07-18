@@ -55,3 +55,16 @@ func TestAvailableModelsOrder(t *testing.T) {
 		t.Fatalf("unexpected available model order: %v", AvailableModels)
 	}
 }
+
+func TestAvailableCopilotModelsIncludesAuto(t *testing.T) {
+	if strings.Join(AvailableCopilotModels, "\n") != "auto" {
+		t.Fatalf("unexpected Copilot model choices: %v", AvailableCopilotModels)
+	}
+	args, err := BuildArgs(Request{Provider: "copilot", Prompt: "hello", Model: "auto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(args, " "), "--model auto") {
+		t.Fatalf("Copilot auto model was not passed: %v", args)
+	}
+}

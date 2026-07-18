@@ -19,7 +19,7 @@ go build -o ./korocon ./cmd/korocon
 
 `korocon`は実行バイナリと同じディレクトリにある`config.json`を読み込みます。ファイルが存在しない場合は既定値を使用します。`go run`では一時ディレクトリに実行バイナリが作られるため、設定ファイルを利用するときはビルドしたバイナリを起動してください。
 
-設定ファイルは`korocon config init`で対話作成できます。`baseBranch`、`branchNamePattern`、`startupCommand`の順に入力し、未入力状態でEnterを押すと画面に表示された既定値を使用します。その後、`korocon config model`と同じモデル設定へ進み、実装者・検証者・レビューアのProviderとModelを入力します。Modelは一覧番号またはモデル名で指定でき、検証者とレビューアは`inherit`で実装者と同じ設定にできます。
+設定ファイルは`korocon config init`で対話作成できます。`baseBranch`、`branchNamePattern`、`startupCommand`の順に入力し、未入力状態でEnterを押すと画面に表示された既定値を使用します。その後、`korocon config model`と同じモデル設定へ進み、実装者・検証者・レビューアのProviderとModelを入力します。Model候補は選択したProviderごとに表示し、CodexではCodex用モデル、Copilotでは`auto`を表示します。Copilotの具体的なモデル名は直接入力できます。検証者とレビューアは`inherit`で実装者と同じ設定にできます。
 
 ```sh
 korocon config init

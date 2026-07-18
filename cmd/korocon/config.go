@@ -139,40 +139,58 @@ func configureModels(reader *bufio.Reader, out io.Writer, configured appconfig.C
 	if _, err := fmt.Fprintln(out, "\nモデル設定を行います。"); err != nil {
 		return configured, err
 	}
-	if _, err := fmt.Fprintln(out, "利用可能なモデル:"); err != nil {
-		return configured, err
-	}
-	for i, model := range runner.AvailableModels {
-		if _, err := fmt.Fprintf(out, "%d. %s\n", i+1, model); err != nil {
-			return configured, err
-		}
-	}
 
+	previousProvider := configured.ImplementerProvider
 	provider, err := readProvider(reader, out, "実装者", configured.ImplementerProvider, false)
 	if err != nil {
 		return configured, err
 	}
 	configured.ImplementerProvider = provider
-	configured.ImplementerModel, err = readModel(reader, out, "実装者", configured.ImplementerModel, false)
+	configured.ImplementerModel = modelDefaultAfterProviderChange(previousProvider, provider, configured.ImplementerModel)
+	configured.ImplementerModel, err = readModel(reader, out, "実装者", provider, configured.ImplementerModel, false)
 	if err != nil {
 		return configured, err
 	}
 
+	previousProvider = configured.VerifierProvider
 	configured.VerifierProvider, err = readProvider(reader, out, "検証者", configured.VerifierProvider, true)
 	if err != nil {
 		return configured, err
 	}
-	configured.VerifierModel, err = readModel(reader, out, "検証者", configured.VerifierModel, true)
+	configured.VerifierModel = modelDefaultAfterProviderChange(previousProvider, configured.VerifierProvider, configured.VerifierModel)
+	verifierProvider := configured.VerifierProvider
+	if verifierProvider == "" {
+		verifierProvider = configured.ImplementerProvider
+	}
+	configured.VerifierModel, err = readModel(reader, out, "検証者", verifierProvider, configured.VerifierModel, true)
 	if err != nil {
 		return configured, err
 	}
 
+	previousProvider = configured.ReviewerProvider
 	configured.ReviewerProvider, err = readProvider(reader, out, "レビューア", configured.ReviewerProvider, true)
 	if err != nil {
 		return configured, err
 	}
-	configured.ReviewerModel, err = readModel(reader, out, "レビューア", configured.ReviewerModel, true)
+	configured.ReviewerModel = modelDefaultAfterProviderChange(previousProvider, configured.ReviewerProvider, configured.ReviewerModel)
+	reviewerProvider := configured.ReviewerProvider
+	if reviewerProvider == "" {
+		reviewerProvider = configured.ImplementerProvider
+	}
+	configured.ReviewerModel, err = readModel(reader, out, "レビューア", reviewerProvider, configured.ReviewerModel, true)
 	return configured, err
+}
+
+func modelDefaultAfterProviderChange(previous, selected, current string) string {
+	previous = strings.TrimSpace(previous)
+	selected = strings.TrimSpace(selected)
+	if selected == "" || previous == selected {
+		return current
+	}
+	if selected == "copilot" {
+		return "auto"
+	}
+	return defaultModel
 }
 
 func readProvider(reader *bufio.Reader, out io.Writer, role, current string, allowInherit bool) (string, error) {
@@ -214,10 +232,24 @@ func readProvider(reader *bufio.Reader, out io.Writer, role, current string, all
 	}
 }
 
-func readModel(reader *bufio.Reader, out io.Writer, role, current string, allowInherit bool) (string, error) {
+func readModel(reader *bufio.Reader, out io.Writer, role, provider, current string, allowInherit bool) (string, error) {
 	current = strings.TrimSpace(current)
 	if current == "" && !allowInherit {
-		current = defaultModel
+		current = modelDefaultForProvider(provider)
+	}
+	models := availableModelsForProvider(provider)
+	if _, err := fmt.Fprintf(out, "%sで選択可能なモデル (provider: %s):\n", role, provider); err != nil {
+		return "", err
+	}
+	for i, model := range models {
+		if _, err := fmt.Fprintf(out, "%d. %s\n", i+1, model); err != nil {
+			return "", err
+		}
+	}
+	if provider == "copilot" {
+		if _, err := fmt.Fprintln(out, "一覧にないCopilotモデル名も直接入力できます。"); err != nil {
+			return "", err
+		}
 	}
 	display := current
 	if display == "" {
@@ -233,19 +265,33 @@ func readModel(reader *bufio.Reader, out io.Writer, role, current string, allowI
 	if allowInherit && (strings.EqualFold(value, "inherit") || strings.EqualFold(value, "same") || value == "実装者と同じ") {
 		return "", nil
 	}
-	if model, ok := selectConfiguredModel(value); ok {
+	if model, ok := selectConfiguredModel(value, models); ok {
 		return model, nil
 	}
 	return value, nil
 }
 
-func selectConfiguredModel(selection string) (string, bool) {
-	for i, model := range runner.AvailableModels {
+func selectConfiguredModel(selection string, models []string) (string, bool) {
+	for i, model := range models {
 		if selection == model || selection == fmt.Sprint(i+1) {
 			return model, true
 		}
 	}
 	return "", false
+}
+
+func availableModelsForProvider(provider string) []string {
+	if strings.EqualFold(strings.TrimSpace(provider), "copilot") {
+		return runner.AvailableCopilotModels
+	}
+	return runner.AvailableModels
+}
+
+func modelDefaultForProvider(provider string) string {
+	if strings.EqualFold(strings.TrimSpace(provider), "copilot") {
+		return "auto"
+	}
+	return defaultModel
 }
 
 func readConfigLine(reader *bufio.Reader, out io.Writer, prompt string) (string, error) {

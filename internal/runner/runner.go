@@ -34,6 +34,12 @@ var AvailableModels = []string{
 	"gpt-5.4-mini",
 }
 
+// AvailableCopilotModels contains stable selector choices supported by the
+// Copilot CLI. Concrete model names can still be entered directly.
+var AvailableCopilotModels = []string{
+	"auto",
+}
+
 // BuildArgs returns arguments without invoking a shell. Keeping this separate
 // makes the permission boundary easy to test and prevents prompt injection from
 // becoming shell syntax.
