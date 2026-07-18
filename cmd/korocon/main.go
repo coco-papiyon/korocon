@@ -979,10 +979,19 @@ func pullRequestIsRoleTarget(pr prworkflow.PullRequest, mode selectionMode) bool
 	case selectionModeImplementer:
 		return prworkflow.HasConflict(pr) || prworkflow.PullRequestHasLabel(pr, "state:pr_conflict") || prworkflow.PullRequestHasLabel(pr, "state:pr_review_comment") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_design_running") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_design_ready") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_design_approved") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_implementation_running") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_implementation_ready") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_implementation_approved")
 	case selectionModeReviewer:
-		return prworkflow.PullRequestHasLabel(pr, "state:pr_created") && !prworkflow.HasConflict(pr) && !prworkflow.PullRequestHasLabel(pr, "state:pr_conflict")
+		return !pullRequestHasStateLabel(pr) && !prworkflow.HasConflict(pr) && !prworkflow.PullRequestHasLabel(pr, "state:pr_conflict")
 	default:
 		return true
 	}
+}
+
+func pullRequestHasStateLabel(pr prworkflow.PullRequest) bool {
+	for _, label := range pr.Labels {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(label.Name)), "state:") {
+			return true
+		}
+	}
+	return false
 }
 
 func pullRequestPhaseName(phase prworkflow.Phase) string {
@@ -1048,7 +1057,7 @@ func pullRequestStatus(pr prworkflow.PullRequest) string {
 	}
 	switch strings.ToUpper(strings.TrimSpace(pr.State)) {
 	case "OPEN":
-		return "オープン"
+		return "未レビュー"
 	case "CLOSED":
 		return "クローズ"
 	default:

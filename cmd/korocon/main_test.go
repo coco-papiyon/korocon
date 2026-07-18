@@ -147,7 +147,8 @@ func TestPullRequestStatusUsesJapaneseStateLabel(t *testing.T) {
 
 func TestRoleSelectionTargets(t *testing.T) {
 	implementerPR := prworkflow.PullRequest{Labels: []prworkflow.Label{{Name: "state:pr_review_comment"}}}
-	reviewerPR := prworkflow.PullRequest{Labels: []prworkflow.Label{{Name: "state:pr_created"}}}
+	reviewerPR := prworkflow.PullRequest{}
+	processedPR := prworkflow.PullRequest{Labels: []prworkflow.Label{{Name: "state:review_ready"}}}
 	approvedPR := prworkflow.PullRequest{Labels: []prworkflow.Label{{Name: "state:review_approved"}}}
 	if !pullRequestIsRoleTarget(implementerPR, selectionModeImplementer) || pullRequestIsRoleTarget(implementerPR, selectionModeReviewer) {
 		t.Fatalf("implementer PR role selection is incorrect")
@@ -155,7 +156,7 @@ func TestRoleSelectionTargets(t *testing.T) {
 	if !pullRequestIsRoleTarget(reviewerPR, selectionModeReviewer) || pullRequestIsRoleTarget(reviewerPR, selectionModeImplementer) {
 		t.Fatalf("reviewer PR role selection is incorrect")
 	}
-	if pullRequestIsRoleTarget(approvedPR, selectionModeReviewer) {
+	if pullRequestIsRoleTarget(processedPR, selectionModeReviewer) || pullRequestIsRoleTarget(approvedPR, selectionModeReviewer) {
 		t.Fatalf("approved PR was selected for reviewer mode")
 	}
 	if issueIsImplementerTarget(issueworkflow.Issue{Labels: []issueworkflow.Label{{Name: "state:implementation_ready"}}}) {
@@ -229,8 +230,8 @@ func TestAutoSelectionUsesHighestReviewerPR(t *testing.T) {
 	t.Cleanup(func() { listPullRequests, loadPullRequest = originalPRs, originalLoadPR })
 	listPullRequests = func(context.Context, string) ([]prworkflow.PullRequest, error) {
 		return []prworkflow.PullRequest{
-			{Number: 4, Title: "PR 4", State: "OPEN", Labels: []prworkflow.Label{{Name: "state:pr_created"}}},
-			{Number: 9, Title: "PR 9", State: "OPEN", Labels: []prworkflow.Label{{Name: "state:pr_created"}}},
+			{Number: 4, Title: "PR 4", State: "OPEN"},
+			{Number: 9, Title: "PR 9", State: "OPEN"},
 		}, nil
 	}
 	loadPullRequest = func(_ context.Context, _ string, number int, _ string) (*prworkflow.Workflow, error) {
@@ -371,6 +372,23 @@ func TestRunInteractiveFallsBackToInitialSelectionWhenRequestedIssueIsMissing(t 
 		!strings.Contains(out.String(), "通常の選択へ戻ります") ||
 		!strings.Contains(out.String(), "取得する情報を選択してください (ISSUE/PR):") {
 		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestExplicitBlankAssigneeDisablesCurrentUserLookup(t *testing.T) {
+	originalLoadIssue := loadIssue
+	originalUser := currentGitHubUser
+	t.Cleanup(func() { loadIssue, currentGitHubUser = originalLoadIssue, originalUser })
+	currentGitHubUser = func(context.Context, string) (string, error) {
+		return "", errors.New("current user lookup should not be called")
+	}
+	loadIssue = func(context.Context, string, int, string) (*issueworkflow.Workflow, error) {
+		return nil, errors.New("not found")
+	}
+	var out strings.Builder
+	err := runInteractive([]string{"--issue", "404", "--assigne", "", "--log-file", filepath.Join(t.TempDir(), "korocon.log")}, strings.NewReader(""), &out, io.Discard)
+	if err == nil || strings.Contains(err.Error(), "current user lookup") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
