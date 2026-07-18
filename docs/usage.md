@@ -115,9 +115,11 @@ PRレビューはリポジトリの`review-pull-request`スキルに従い、結
 | --- | --- |
 | 未入力Enter、`承認`、`approve`、`a` | レビューを承認し、動作確認へ進む |
 | `/rerun`、`/rerun <補足>` | 同じPRのレビューを再実行する |
-| `/fix <指示>`または任意の文字列 | レビュー修正指示として修正の検討・実装を開始する |
+| `/fix <指示>`または任意の文字列 | レビュー修正指示をPRへ登録し、レビューを終了してIssue/PR選択へ戻る |
 
-レビュー修正指示はPRコメントへ投稿し、`state:pr_review_comment`へ更新します。修正ジョブは`../<リポジトリ名>-branches/<リポジトリ名>-pr-<PR番号>`へPR headのworktreeを作り、`review-comment-fix`スキルに従って設計検討、実装、テストを行います。結果は`<workspaceName>/review_fix_implementation/<PR番号>_<正規化タイトル>.md`へ保存します。承認すると変更をcommitしてPR headへpushし、`state:review_fixed`へ更新してレビューを再実行します。
+レビュー修正指示はPRコメントへ投稿し、`state:pr_review_comment`へ更新します。この時点では修正を開始せず、レビューアを停止して最初のIssue/PR選択へ戻ります。同じPRを再選択すると実装者を起動し、`../<リポジトリ名>-branches/<リポジトリ名>-pr-<PR番号>`へPR headのworktreeを作り、`review-comment-fix`スキルに従って設計検討、実装、テストを行います。結果は`<workspaceName>/review_fix_implementation/<PR番号>_<正規化タイトル>.md`へ保存します。承認すると変更をcommitしてPR headへpushし、`state:review_fixed`へ更新して実装者を停止し、最初の選択へ戻ります。再レビューは次に同じPRを選択したとき、レビューアの新しいセッションで実行します。
+
+Issueの設計・実装、PRレビュー指摘修正、PRコンフリクト解消は実装者を使用します。Issue実装の検証は検証者、PRレビューと動作確認はレビューアを使用します。担当が変わる工程は同じAIプロセスで連続実行しません。
 
 レビュー承認後、`startupCommand`が設定されていればコマンドを自動起動し、`state:review_approved`として動作確認を待ちます。動作確認を完了してPRをクローズまたはマージした後、未入力Enterまたは`/check`を入力します。PRがCLOSEDまたはMERGEDならコマンドを停止して`state:completed`へ更新し、最初の`issue`/`pr`選択へ戻ります。OPENの場合は動作確認待ちを継続します。`startupCommand`が未設定の場合はレビュー承認時点でPR処理を終了し、最初の選択へ戻ります。
 

@@ -173,7 +173,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 		}
 		err = func() error {
 			activeAI := implementer
-			if selectedPR != nil && selectedPR.Phase != prworkflow.PhaseConflict {
+			if selectedPR != nil && selectedPR.Phase == prworkflow.PhaseReview {
 				activeAI = reviewer
 			}
 			initialPrompt := ""
@@ -252,8 +252,8 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 					defer closeVerification()
 				}
 				prController = newPRReviewController(selectedPR, stderr, fixJob, conflictJob, fixEngine.Close, startVerification, closeVerification)
-				if selectedPR.Phase == prworkflow.PhaseConflict {
-					initialJob = prController.InitialJob()
+				if job := prController.InitialJob(); job != nil {
+					initialJob = job
 				} else {
 					initialPrompt = prController.InitialPrompt()
 				}
@@ -519,10 +519,14 @@ func selectPullRequest(ctx context.Context, reader *bufio.Reader, out io.Writer,
 }
 
 func pullRequestPhaseName(phase prworkflow.Phase) string {
-	if phase == prworkflow.PhaseConflict {
+	switch phase {
+	case prworkflow.PhaseConflict:
 		return "コンフリクト解消"
+	case prworkflow.PhaseFix:
+		return "レビュー指摘修正"
+	default:
+		return "レビュー"
 	}
-	return "レビュー"
 }
 
 var pullRequestStateNames = map[string]string{

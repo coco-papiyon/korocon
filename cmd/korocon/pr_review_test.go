@@ -89,26 +89,20 @@ func TestPRReviewApprovalMovesToVerificationAndCompletesWhenClosed(t *testing.T)
 	}
 }
 
-func TestPRFixApprovalClosesFixSessionAndRerunsReview(t *testing.T) {
-	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
+func TestPRFixRunsAsSeparateJobAndReturnsToSelectionAfterApproval(t *testing.T) {
+	workflow := &fakePRWorkflow{phase: prworkflow.PhaseFix}
 	closed := 0
 	controller := newPRReviewController(workflow, &bytes.Buffer{}, func(prompt string) *daemon.JobSpec { return &daemon.JobSpec{Prompt: prompt} }, nil, func() error {
 		closed++
 		return nil
 	}, nil, nil)
-	completePRJob(t, controller, workflow.Prompt(), "review result")
-	fixAction, err := controller.HandleInput(context.Background(), "修正してください")
-	if err != nil || fixAction.Job == nil {
-		t.Fatalf("fix action=%+v err=%v", fixAction, err)
+	fixJob := controller.InitialJob()
+	if fixJob == nil || !strings.Contains(fixJob.Prompt, "fix:") {
+		t.Fatalf("initial fix job=%+v", fixJob)
 	}
-	if err := controller.OnJobStart(context.Background(), 2, fixAction.Job.Prompt); err != nil {
-		t.Fatal(err)
-	}
-	if err := controller.OnJobFinish(context.Background(), 2, "", "fixed result", nil); err != nil {
-		t.Fatal(err)
-	}
+	completePRJob(t, controller, fixJob.Prompt, "fixed result")
 	action, err := controller.HandleInput(context.Background(), "approve")
-	if err != nil || action.Prompt != workflow.Prompt() || workflow.fixApproved != "fixed result" || workflow.phase != prworkflow.PhaseReview || closed != 1 {
+	if err != nil || !action.Restart || action.Prompt != "" || workflow.fixApproved != "fixed result" || workflow.phase != prworkflow.PhaseFix || closed != 1 {
 		t.Fatalf("action=%+v workflow=%+v closed=%d err=%v", action, workflow, closed, err)
 	}
 }
@@ -123,7 +117,7 @@ func TestPRReviewRerunAndFixInstruction(t *testing.T) {
 	}
 	completePRJob(t, controller, action.Prompt, "review result 2")
 	action, err = controller.HandleInput(context.Background(), "テストを追加してください")
-	if err != nil || action.Job == nil || action.Job.Prompt != "fix: テストを追加してください" || workflow.phase != prworkflow.PhaseFix {
+	if err != nil || !action.Restart || action.Job != nil || workflow.phase != prworkflow.PhaseReview {
 		t.Fatalf("fix action=%+v workflow=%+v err=%v", action, workflow, err)
 	}
 	if workflow.changes != "review result 2:テストを追加してください" {

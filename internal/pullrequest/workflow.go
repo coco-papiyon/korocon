@@ -134,10 +134,7 @@ func load(ctx context.Context, workingDir string, number int, workspaceName stri
 	if isClosed(pr.State) {
 		return nil, fmt.Errorf("PR #%dは%sです", number, strings.ToUpper(pr.State))
 	}
-	phase := PhaseReview
-	if HasConflict(pr) {
-		phase = PhaseConflict
-	}
+	phase := pullRequestPhase(pr)
 	return &Workflow{dir: workingDir, workspaceName: workspaceName, runner: runner, PR: pr, Phase: phase}, nil
 }
 
@@ -152,6 +149,9 @@ func (w *Workflow) SetConflictPublisher(publisher func(context.Context, string) 
 func (w *Workflow) Prompt() string {
 	if w.Phase == PhaseConflict {
 		return w.ConflictPrompt("")
+	}
+	if w.Phase == PhaseFix {
+		return w.FixPrompt("")
 	}
 	return strings.Join([]string{
 		"以下のGitHub Pull Requestをレビューしてください。",
@@ -181,11 +181,16 @@ func (w *Workflow) RevisionPrompt(feedback string) string {
 }
 
 func (w *Workflow) FixPrompt(instruction string) string {
-	return strings.Join([]string{
+	lines := []string{
 		"以下のレビュー修正指示を検討し、GitHub Pull Requestの実装を修正してください。",
 		"リポジトリのreview-comment-fixスキルに従い、設計検討、実装、テストまで行ってください。",
-		"", "レビュー修正指示:", strings.TrimSpace(instruction), "", "Pull Request情報:", w.Context(),
-	}, "\n")
+	}
+	if strings.TrimSpace(instruction) != "" {
+		lines = append(lines, "", "追加のレビュー修正指示:", strings.TrimSpace(instruction))
+	} else {
+		lines = append(lines, "", "PRコメントに登録されているレビュー結果とレビュー修正指示を確認してください。")
+	}
+	return strings.Join(append(lines, "", "Pull Request情報:", w.Context()), "\n")
 }
 
 func (w *Workflow) Context() string {
@@ -315,6 +320,27 @@ func (w *Workflow) ApproveConflict(ctx context.Context, result string) error {
 func HasConflict(pr PullRequest) bool {
 	return strings.EqualFold(strings.TrimSpace(pr.Mergeable), "CONFLICTING") ||
 		strings.EqualFold(strings.TrimSpace(pr.MergeStateStatus), "DIRTY")
+}
+
+func pullRequestPhase(pr PullRequest) Phase {
+	if HasConflict(pr) {
+		return PhaseConflict
+	}
+	fixLabels := map[string]struct{}{
+		"state:pr_review_comment":                  {},
+		"state:review_fix_design_running":          {},
+		"state:review_fix_design_ready":            {},
+		"state:review_fix_design_approved":         {},
+		"state:review_fix_implementation_running":  {},
+		"state:review_fix_implementation_ready":    {},
+		"state:review_fix_implementation_approved": {},
+	}
+	for _, label := range pr.Labels {
+		if _, ok := fixLabels[strings.ToLower(strings.TrimSpace(label.Name))]; ok {
+			return PhaseFix
+		}
+	}
+	return PhaseReview
 }
 
 func (w *Workflow) CompleteIfClosed(ctx context.Context) (bool, string, error) {

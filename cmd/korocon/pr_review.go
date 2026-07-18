@@ -57,14 +57,24 @@ func (c *prReviewController) initialPrompt() string {
 	if c.workflow.CurrentPhase() == prworkflow.PhaseConflict {
 		return c.workflow.ConflictPrompt("")
 	}
+	if c.workflow.CurrentPhase() == prworkflow.PhaseFix {
+		return c.workflow.FixPrompt("")
+	}
 	return c.workflow.Prompt()
 }
 
 func (c *prReviewController) InitialJob() *daemon.JobSpec {
-	if c.workflow.CurrentPhase() != prworkflow.PhaseConflict || c.conflictJob == nil {
-		return nil
+	switch c.workflow.CurrentPhase() {
+	case prworkflow.PhaseConflict:
+		if c.conflictJob != nil {
+			return c.conflictJob(c.initialPrompt())
+		}
+	case prworkflow.PhaseFix:
+		if c.fixJob != nil {
+			return c.fixJob(c.initialPrompt())
+		}
 	}
-	return c.conflictJob(c.initialPrompt())
+	return nil
 }
 
 func (c *prReviewController) OnJobStart(ctx context.Context, id uint64, prompt string) error {
@@ -226,8 +236,11 @@ func (c *prReviewController) HandleInput(ctx context.Context, input string) (dae
 		if err := c.workflow.RequestChanges(ctx, result, instruction); err != nil {
 			return daemon.InputAction{Handled: true}, err
 		}
-		c.workflow.SetPhase(prworkflow.PhaseFix)
-		return c.enqueue(c.workflow.FixPrompt(instruction), true, "レビュー修正指示をAIへ送信し、修正を実装します。")
+		c.mu.Lock()
+		c.pending, c.result = false, ""
+		c.mu.Unlock()
+		_, err := fmt.Fprintln(c.out, "レビュー修正指示をPRへ登録しました。レビューを終了し、Issue/PR選択へ戻ります。")
+		return daemon.InputAction{Handled: true, Restart: true}, err
 	}
 
 	if isApprovalInput(input) {
@@ -239,8 +252,11 @@ func (c *prReviewController) HandleInput(ctx context.Context, input string) (dae
 				return daemon.InputAction{Handled: true}, err
 			}
 		}
-		c.workflow.SetPhase(prworkflow.PhaseReview)
-		return c.enqueue(c.workflow.Prompt(), false, "レビュー指摘修正を承認してpushしました。PRを再レビューします。")
+		c.mu.Lock()
+		c.pending, c.result = false, ""
+		c.mu.Unlock()
+		_, err := fmt.Fprintln(c.out, "レビュー指摘修正を承認してPR headへpushしました。修正処理を終了し、Issue/PR選択へ戻ります。")
+		return daemon.InputAction{Handled: true, Restart: true}, err
 	}
 	return c.enqueue(c.workflow.FixPrompt(input), true, "追加指示をAIへ送信し、レビュー指摘修正を再実行します。")
 }

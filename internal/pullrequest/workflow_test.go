@@ -166,3 +166,30 @@ func TestLoadConflictTakesPriorityAndUsesConflictLifecycle(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadReviewCommentStartsSeparateFixPhase(t *testing.T) {
+	runner := &fakeRunner{responses: map[string]string{
+		"pr view 13 --json number": `{"number":13,"title":"Fix","state":"OPEN","mergeable":"MERGEABLE","headRefName":"feature/13","baseRefName":"main","labels":[{"name":"state:pr_review_comment"}],"comments":[{"author":{"login":"reviewer"},"body":"テストを追加してください"}]}`,
+	}}
+	workflow, err := load(context.Background(), t.TempDir(), 13, ".workspace", runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workflow.Phase != PhaseFix {
+		t.Fatalf("phase = %q", workflow.Phase)
+	}
+	prompt := workflow.Prompt()
+	if !strings.Contains(prompt, "review-comment-fix") || !strings.Contains(prompt, "テストを追加してください") {
+		t.Fatalf("prompt = %q", prompt)
+	}
+}
+
+func TestPullRequestPhasePrioritizesConflictOverReviewFix(t *testing.T) {
+	pr := PullRequest{
+		Mergeable: "CONFLICTING",
+		Labels:    []Label{{Name: "state:pr_review_comment"}},
+	}
+	if phase := pullRequestPhase(pr); phase != PhaseConflict {
+		t.Fatalf("phase = %q", phase)
+	}
+}
