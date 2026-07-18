@@ -236,6 +236,65 @@ func TestRunExecutesCustomJobWhenPrimaryProviderIsCopilot(t *testing.T) {
 	}
 }
 
+func TestRunKeepsPhaseHistoryWhenPhaseChanges(t *testing.T) {
+	var status strings.Builder
+	err := Run(context.Background(), strings.NewReader(""), &strings.Builder{}, Config{
+		Provider:  "copilot",
+		Binary:    "/bin/echo",
+		StatusOut: &status,
+		InitialJob: &JobSpec{Prompt: "implementation", Execute: func(_ context.Context, _ string, _ runner.ServerRequestHandler, setPhase func(string), showProgress func()) (runner.TurnResult, error) {
+			setPhase("実装1回目")
+			showProgress()
+			setPhase("実装1回目")
+			setPhase("検証1回目")
+			setPhase("実装2回目")
+			return runner.TurnResult{}, nil
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := status.String()
+	for _, want := range []string{
+		"[job 1] 完了(実装1回目)",
+		"[job 2] 実行中(検証1回目)",
+		"[job 2] 完了(検証1回目)",
+		"[job 3] 実行中(実装2回目)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("status does not contain %q: %q", want, got)
+		}
+	}
+	if strings.Count(got, "完了(実装1回目)") != 1 {
+		t.Fatalf("same-phase progress created duplicate history: %q", got)
+	}
+	if strings.Index(got, "[job 1] 完了(実装1回目)") > strings.Index(got, "[job 2] 完了(検証1回目)") {
+		t.Fatalf("phase history is out of order: %q", got)
+	}
+}
+
+func TestRunKeepsPhaseHistoryWhenPhaseFails(t *testing.T) {
+	var status strings.Builder
+	err := Run(context.Background(), strings.NewReader(""), &strings.Builder{}, Config{
+		Provider:  "copilot",
+		Binary:    "/bin/echo",
+		StatusOut: &status,
+		InitialJob: &JobSpec{Prompt: "implementation", Execute: func(_ context.Context, _ string, _ runner.ServerRequestHandler, setPhase func(string), _ func()) (runner.TurnResult, error) {
+			setPhase("実装1回目")
+			setPhase("検証1回目")
+			return runner.TurnResult{}, errors.New("verification failed")
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := status.String()
+	if !strings.Contains(got, "[job 1] 完了(実装1回目)") || !strings.Contains(got, "[job 2] 失敗") {
+		t.Fatalf("phase history was not preserved on failure: %q", got)
+	}
+}
+
 func TestRunModelCommandListsAndSwitchesModelByName(t *testing.T) {
 	var out, status strings.Builder
 	err := Run(context.Background(), strings.NewReader("/model\n/model gpt-5.6-terra\nfirst\n"), &out, Config{

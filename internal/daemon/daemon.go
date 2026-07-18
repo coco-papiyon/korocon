@@ -342,11 +342,17 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			setPhase := func(next string) {
 				progressMu.Lock()
 				defer progressMu.Unlock()
-				if phaseStarted && strings.TrimSpace(next) != phase {
+				nextPhase := strings.TrimSpace(next)
+				if phaseStarted && nextPhase != phase {
+					if phase == "" {
+						status("\r\033[2K[job %d] 完了\n", displayID)
+					} else {
+						status("\r\033[2K[job %d] 完了(%s)\n", displayID, phase)
+					}
 					displayID = nextID.Add(1)
 				}
 				phaseStarted = true
-				phase = strings.TrimSpace(next)
+				phase = nextPhase
 				dots = 1
 				if phase == "" {
 					status("\r\033[2K[job %d] 実行中%s", displayID, strings.Repeat(".", dots))
