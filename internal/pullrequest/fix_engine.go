@@ -24,6 +24,7 @@ type FixConfig struct {
 	Number                  int
 	Title                   string
 	HeadRefName             string
+	BaseRefName             string
 	LogOut                  io.Writer
 	LogErr                  io.Writer
 }
@@ -33,10 +34,11 @@ var startFixSession = func(ctx context.Context, cfg runner.SessionConfig) (runne
 }
 
 type FixEngine struct {
-	cfg      FixConfig
-	mu       sync.Mutex
-	session  runner.AgentSession
-	worktree string
+	cfg              FixConfig
+	mu               sync.Mutex
+	session          runner.AgentSession
+	worktree         string
+	conflictPrepared bool
 }
 
 func NewFixEngine(cfg FixConfig) *FixEngine { return &FixEngine{cfg: cfg} }
@@ -51,6 +53,34 @@ func (e *FixEngine) Run(ctx context.Context, prompt, model string, handler runne
 		setPhase("レビュー指摘修正")
 	}
 	prompt = strings.Join([]string{prompt, "", "作業ディレクトリ: " + e.worktree, "PR headブランチ: " + e.cfg.HeadRefName, "作業ディレクトリ内を直接修正し、必要なテストを実行してください。"}, "\n")
+	if strings.TrimSpace(e.cfg.Model) != "" {
+		model = e.cfg.Model
+	}
+	return e.session.RunTurn(ctx, prompt, model, onEvent)
+}
+
+func (e *FixEngine) RunConflict(ctx context.Context, prompt, model string, handler runner.ServerRequestHandler, setPhase func(string), onEvent func()) (runner.TurnResult, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err := e.ensureConflictStarted(ctx, model, handler); err != nil {
+		return runner.TurnResult{}, err
+	}
+	if setPhase != nil {
+		setPhase("コンフリクト解消")
+	}
+	files, err := e.conflictFiles(ctx)
+	if err != nil {
+		return runner.TurnResult{}, err
+	}
+	prompt = strings.Join([]string{
+		prompt,
+		"",
+		"作業ディレクトリ: " + e.worktree,
+		"PR headブランチ: " + e.cfg.HeadRefName,
+		"PR baseブランチ: " + e.cfg.BaseRefName,
+		"競合ファイル:", files,
+		"作業ディレクトリではbaseブランチのmergeを開始済みです。競合マーカーを解消し、必要なテストを実行してください。",
+	}, "\n")
 	if strings.TrimSpace(e.cfg.Model) != "" {
 		model = e.cfg.Model
 	}
@@ -79,6 +109,48 @@ func (e *FixEngine) Publish(ctx context.Context, _ string) error {
 	return err
 }
 
+func (e *FixEngine) PublishConflict(ctx context.Context, _ string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.worktree == "" || !e.conflictPrepared {
+		return errors.New("conflict worktree is not initialized")
+	}
+	if _, err := gitOutput(ctx, e.worktree, "add", "-A"); err != nil {
+		return err
+	}
+	unresolved, err := e.conflictFiles(ctx)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(unresolved) != "" {
+		return fmt.Errorf("unresolved conflict files remain:\n%s", unresolved)
+	}
+	check := exec.CommandContext(ctx, "git", "-C", e.worktree, "diff", "--cached", "--check")
+	if out, err := check.CombinedOutput(); err != nil {
+		return fmt.Errorf("conflict resolution contains invalid markers or whitespace errors: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	status, err := gitOutput(ctx, e.worktree, "status", "--porcelain")
+	if err != nil {
+		return err
+	}
+	if mergeInProgress(ctx, e.worktree) {
+		if _, err := gitOutput(ctx, e.worktree, "commit", "--no-edit"); err != nil {
+			return fmt.Errorf("commit conflict resolution: %w", err)
+		}
+	} else if strings.TrimSpace(status) != "" {
+		if _, err := gitOutput(ctx, e.worktree, "commit", "-m", fmt.Sprintf("fix: resolve conflicts for PR #%d", e.cfg.Number)); err != nil {
+			return fmt.Errorf("commit conflict resolution: %w", err)
+		}
+	}
+	baseRef := "origin/" + strings.TrimSpace(e.cfg.BaseRefName)
+	ancestor := exec.CommandContext(ctx, "git", "-C", e.worktree, "merge-base", "--is-ancestor", baseRef, "HEAD")
+	if out, err := ancestor.CombinedOutput(); err != nil {
+		return fmt.Errorf("PR base branch is not integrated into the resolved HEAD: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	_, err = gitOutput(ctx, e.worktree, "push", "origin", "HEAD:"+e.cfg.HeadRefName)
+	return err
+}
+
 func (e *FixEngine) Close() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -88,6 +160,21 @@ func (e *FixEngine) Close() error {
 	err := e.session.Close()
 	e.session = nil
 	return err
+}
+
+// Worktree prepares and returns the PR head worktree without starting a fix AI.
+func (e *FixEngine) Worktree(ctx context.Context) (string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.worktree != "" {
+		return e.worktree, nil
+	}
+	worktree, err := e.ensureWorktree(ctx)
+	if err != nil {
+		return "", err
+	}
+	e.worktree = worktree
+	return worktree, nil
 }
 
 func (e *FixEngine) ensureStarted(ctx context.Context, model string, handler runner.ServerRequestHandler) error {
@@ -107,6 +194,67 @@ func (e *FixEngine) ensureStarted(ctx context.Context, model string, handler run
 	}
 	e.worktree, e.session = worktree, session
 	return nil
+}
+
+func (e *FixEngine) ensureConflictStarted(ctx context.Context, model string, handler runner.ServerRequestHandler) error {
+	if e.session != nil && e.conflictPrepared {
+		return nil
+	}
+	worktree, err := e.ensureWorktree(ctx)
+	if err != nil {
+		return err
+	}
+	e.worktree = worktree
+	if !e.conflictPrepared {
+		if err := e.prepareConflictMerge(ctx); err != nil {
+			return err
+		}
+		e.conflictPrepared = true
+	}
+	if e.session != nil {
+		return nil
+	}
+	if strings.TrimSpace(e.cfg.Model) != "" {
+		model = e.cfg.Model
+	}
+	session, err := startFixSession(ctx, runner.SessionConfig{Provider: e.cfg.Provider, Binary: e.cfg.Binary, Model: model, WorkingDir: worktree, LogOut: e.cfg.LogOut, LogErr: e.cfg.LogErr, HandleRequest: handler})
+	if err != nil {
+		return fmt.Errorf("start conflict resolution AI: %w", err)
+	}
+	e.session = session
+	return nil
+}
+
+func (e *FixEngine) prepareConflictMerge(ctx context.Context) error {
+	base := strings.TrimSpace(e.cfg.BaseRefName)
+	if base == "" {
+		return errors.New("PR base branch is empty")
+	}
+	if mergeInProgress(ctx, e.worktree) {
+		return nil
+	}
+	if _, err := gitOutput(ctx, e.worktree, "fetch", "origin", base); err != nil {
+		return fmt.Errorf("fetch PR base branch: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", e.worktree, "merge", "--no-edit", "origin/"+base)
+	out, err := cmd.CombinedOutput()
+	if err == nil || mergeInProgress(ctx, e.worktree) {
+		return nil
+	}
+	return fmt.Errorf("merge PR base branch: %w: %s", err, strings.TrimSpace(string(out)))
+}
+
+func (e *FixEngine) conflictFiles(ctx context.Context) (string, error) {
+	files, err := gitOutput(ctx, e.worktree, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return "", fmt.Errorf("list conflict files: %w", err)
+	}
+	return strings.TrimSpace(files), nil
+}
+
+func mergeInProgress(ctx context.Context, dir string) bool {
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "-q", "--verify", "MERGE_HEAD")
+	return cmd.Run() == nil
 }
 
 func (e *FixEngine) ensureWorktree(ctx context.Context) (string, error) {

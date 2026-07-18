@@ -10,10 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 
 	appconfig "github.com/coco-papiyon/korocon/internal/config"
 	"github.com/coco-papiyon/korocon/internal/daemon"
@@ -131,7 +133,11 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 		return fmt.Errorf("open log file %q: %w", *logPath, err)
 	}
 	defer logFile.Close()
-	fmt.Fprintf(stderr, "implementer: %s / %s / %s\nverifier: %s / %s / %s\nreviewer: %s / %s / %s\nconfig: %s\nworkspace: %s\nbranch: %s\nbase branch: %s\nimplementation directory: %s\nimplementation loops: %d\nauto-approved commands: %d\nlog: %s\n", implementer.Provider, implementer.Model, aiBinaryName(implementer), verifier.Provider, verifier.Model, aiBinaryName(verifier), reviewer.Provider, reviewer.Model, aiBinaryName(reviewer), configPath, configured.WorkspaceName, configured.BranchNamePattern, configured.BaseBranch, configured.ImplementationDirectory, configured.ImplementationLoopCount, len(configured.BuiltinAllowedCommands), *logPath)
+	startupCommand := configured.StartupCommand
+	if startupCommand == "" {
+		startupCommand = "未設定"
+	}
+	fmt.Fprintf(stderr, "implementer: %s / %s / %s\nverifier: %s / %s / %s\nreviewer: %s / %s / %s\nconfig: %s\nworkspace: %s\nbranch: %s\nbase branch: %s\nimplementation directory: %s\nimplementation loops: %d\nstartup command: %s\nauto-approved commands: %d\nlog: %s\n", implementer.Provider, implementer.Model, aiBinaryName(implementer), verifier.Provider, verifier.Model, aiBinaryName(verifier), reviewer.Provider, reviewer.Model, aiBinaryName(reviewer), configPath, configured.WorkspaceName, configured.BranchNamePattern, configured.BaseBranch, configured.ImplementationDirectory, configured.ImplementationLoopCount, startupCommand, len(configured.BuiltinAllowedCommands), *logPath)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	selectionInput := in
@@ -167,7 +173,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 		}
 		err = func() error {
 			activeAI := implementer
-			if selectedPR != nil {
+			if selectedPR != nil && selectedPR.Phase != prworkflow.PhaseConflict {
 				activeAI = reviewer
 			}
 			initialPrompt := ""
@@ -176,6 +182,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 			var implementationEngine *implementation.Engine
 			var prController *prReviewController
 			var fixEngine *prworkflow.FixEngine
+			var runtimeCommand *prworkflow.RuntimeCommand
 			if selectedIssue != nil {
 				implementationEngine = implementation.New(implementation.Config{
 					Provider: implementer.Provider, Binary: implementer.Binary,
@@ -208,18 +215,48 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 				fixEngine = prworkflow.NewFixEngine(prworkflow.FixConfig{
 					Provider: implementer.Provider, Binary: implementer.Binary, Model: implementer.Model,
 					RepositoryDir: *dir, ImplementationDirectory: configured.ImplementationDirectory,
-					Number: selectedPR.PR.Number, Title: selectedPR.PR.Title, HeadRefName: selectedPR.PR.HeadRefName,
+					Number: selectedPR.PR.Number, Title: selectedPR.PR.Title,
+					HeadRefName: selectedPR.PR.HeadRefName, BaseRefName: selectedPR.PR.BaseRefName,
 					LogOut: logFile, LogErr: logFile,
 				})
 				selectedPR.SetFixPublisher(fixEngine.Publish)
+				selectedPR.SetConflictPublisher(fixEngine.PublishConflict)
 				defer fixEngine.Close()
 				fixJob := func(prompt string) *daemon.JobSpec {
 					return &daemon.JobSpec{Prompt: prompt, Execute: func(ctx context.Context, model string, handler runner.ServerRequestHandler, setPhase func(string), onEvent func()) (runner.TurnResult, error) {
 						return fixEngine.Run(ctx, prompt, model, handler, setPhase, onEvent)
 					}}
 				}
-				prController = newPRReviewController(selectedPR, stderr, fixJob, fixEngine.Close)
-				initialPrompt = prController.InitialPrompt()
+				conflictJob := func(prompt string) *daemon.JobSpec {
+					return &daemon.JobSpec{Prompt: prompt, Execute: func(ctx context.Context, model string, handler runner.ServerRequestHandler, setPhase func(string), onEvent func()) (runner.TurnResult, error) {
+						return fixEngine.RunConflict(ctx, prompt, model, handler, setPhase, onEvent)
+					}}
+				}
+				var startVerification func(context.Context) (string, error)
+				var closeVerification func() error
+				if configured.StartupCommand != "" {
+					startVerification = func(ctx context.Context) (string, error) {
+						worktree, err := fixEngine.Worktree(ctx)
+						if err != nil {
+							return "", fmt.Errorf("prepare PR worktree: %w", err)
+						}
+						runtimeCommand = prworkflow.NewRuntimeCommand(configured.StartupCommand, worktree, logFile)
+						return runtimeCommand.Start(ctx)
+					}
+					closeVerification = func() error {
+						if runtimeCommand == nil {
+							return nil
+						}
+						return runtimeCommand.Close()
+					}
+					defer closeVerification()
+				}
+				prController = newPRReviewController(selectedPR, stderr, fixJob, conflictJob, fixEngine.Close, startVerification, closeVerification)
+				if selectedPR.Phase == prworkflow.PhaseConflict {
+					initialJob = prController.InitialJob()
+				} else {
+					initialPrompt = prController.InitialPrompt()
+				}
 			}
 			cfg := daemon.Config{
 				Provider: activeAI.Provider, Binary: activeAI.Binary, Model: activeAI.Model,
@@ -329,7 +366,7 @@ func selectRequestedGitHubInformation(ctx context.Context, out io.Writer, workin
 		if err != nil {
 			return nil, nil, fmt.Errorf("PR #%dの取得に失敗しました: %w", requested.prNumber, err)
 		}
-		if _, err := fmt.Fprintf(out, "\n%s\n\n実行工程: レビュー\n", selected.Context()); err != nil {
+		if _, err := fmt.Fprintf(out, "\n%s\n\n実行工程: %s\n", selected.Context(), pullRequestPhaseName(selected.Phase)); err != nil {
 			return nil, nil, err
 		}
 		return nil, selected, nil
@@ -434,25 +471,31 @@ func selectPullRequest(ctx context.Context, reader *bufio.Reader, out io.Writer,
 	if err != nil {
 		return nil, fmt.Errorf("PR一覧の取得に失敗しました: %w", err)
 	}
+	prs = slices.DeleteFunc(prs, func(pr prworkflow.PullRequest) bool {
+		return strings.EqualFold(strings.TrimSpace(pr.State), "MERGED") || pr.IsDraft
+	})
 	if len(prs) == 0 {
-		return nil, errors.New("PRがありません")
+		return nil, errors.New("表示対象のPRがありません（MERGEDまたはDraftを除く）")
 	}
 	sort.Slice(prs, func(i, j int) bool { return prs[i].Number > prs[j].Number })
 	if _, err := fmt.Fprintln(out, "\nPR一覧:"); err != nil {
 		return nil, err
 	}
+	table := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	if _, err := fmt.Fprintln(table, "番号\t状態\tタイトル"); err != nil {
+		return nil, err
+	}
+	if _, err := fmt.Fprintln(table, "----\t----\t--------"); err != nil {
+		return nil, err
+	}
 	for _, pr := range prs {
-		status := strings.ToUpper(strings.TrimSpace(pr.State))
-		if pr.IsDraft {
-			status += "/DRAFT"
-		}
-		review := strings.ToUpper(strings.TrimSpace(pr.ReviewDecision))
-		if review == "" {
-			review = "REVIEWなし"
-		}
-		if _, err := fmt.Fprintf(out, "#%d [%s] [%s] %s (%s -> %s)\n", pr.Number, status, review, pr.Title, pr.HeadRefName, pr.BaseRefName); err != nil {
+		status := pullRequestStatus(pr)
+		if _, err := fmt.Fprintf(table, "%d\t%s\t%s\n", pr.Number, status, tableCell(pr.Title)); err != nil {
 			return nil, err
 		}
+	}
+	if err := table.Flush(); err != nil {
+		return nil, err
 	}
 	if _, err := fmt.Fprint(out, "\nPR番号を入力してください: "); err != nil {
 		return nil, err
@@ -469,10 +512,72 @@ func selectPullRequest(ctx context.Context, reader *bufio.Reader, out io.Writer,
 	if err != nil {
 		return nil, fmt.Errorf("PR #%dの取得に失敗しました: %w", number, err)
 	}
-	if _, err := fmt.Fprintf(out, "\n%s\n\n実行工程: レビュー\n", selected.Context()); err != nil {
+	if _, err := fmt.Fprintf(out, "\n%s\n\n実行工程: %s\n", selected.Context(), pullRequestPhaseName(selected.Phase)); err != nil {
 		return nil, err
 	}
 	return selected, nil
+}
+
+func pullRequestPhaseName(phase prworkflow.Phase) string {
+	if phase == prworkflow.PhaseConflict {
+		return "コンフリクト解消"
+	}
+	return "レビュー"
+}
+
+var pullRequestStateNames = map[string]string{
+	"state:detected":                           "検出済み",
+	"state:design_running":                     "設計実行中",
+	"state:design_ready":                       "設計完了・承認待ち",
+	"state:design_approved":                    "設計承認済み",
+	"state:implementation_running":             "実装中",
+	"state:implementation_ready":               "実装完了・承認待ち",
+	"state:implementation_approved":            "実装承認済み",
+	"state:pr_created":                         "PR作成済み",
+	"state:pr_review_comment":                  "レビュー修正指示あり",
+	"state:pr_conflict":                        "コンフリクトあり",
+	"state:pr_conflict_running":                "コンフリクト解消中",
+	"state:pr_conflict_ready":                  "コンフリクト解消完了・承認待ち",
+	"state:pr_conflict_resolved":               "コンフリクト解消済み",
+	"state:review_fix_design_running":          "レビュー修正設計中",
+	"state:review_fix_design_ready":            "レビュー修正設計完了・承認待ち",
+	"state:review_fix_design_approved":         "レビュー修正設計承認済み",
+	"state:review_fix_implementation_running":  "レビュー修正実装中",
+	"state:review_fix_implementation_ready":    "レビュー修正実装完了・承認待ち",
+	"state:review_fix_implementation_approved": "レビュー修正実装承認済み",
+	"state:review_fixed":                       "レビュー修正済み",
+	"state:review_running":                     "レビュー中",
+	"state:review_ready":                       "レビュー完了・承認待ち",
+	"state:review_approved":                    "レビュー承認済み",
+	"state:completed":                          "完了",
+	"state:failed":                             "失敗",
+}
+
+func pullRequestStatus(pr prworkflow.PullRequest) string {
+	if prworkflow.HasConflict(pr) {
+		return "コンフリクト"
+	}
+	for _, label := range pr.Labels {
+		name := strings.ToLower(strings.TrimSpace(label.Name))
+		if status, ok := pullRequestStateNames[name]; ok {
+			return status
+		}
+		if strings.HasPrefix(name, "state:") {
+			return strings.TrimPrefix(name, "state:")
+		}
+	}
+	switch strings.ToUpper(strings.TrimSpace(pr.State)) {
+	case "OPEN":
+		return "オープン"
+	case "CLOSED":
+		return "クローズ"
+	default:
+		return strings.ToUpper(strings.TrimSpace(pr.State))
+	}
+}
+
+func tableCell(value string) string {
+	return strings.Join(strings.Fields(strings.ReplaceAll(strings.ReplaceAll(value, "\r", " "), "\n", " ")), " ")
 }
 
 func showGitHubCommand(ctx context.Context, out io.Writer, workingDir string, args ...string) error {

@@ -17,6 +17,7 @@ type Phase string
 const (
 	PhaseReview       Phase = "review"
 	PhaseFix          Phase = "review_fix_implementation"
+	PhaseConflict     Phase = "pr_conflict"
 	PhaseVerification Phase = "verification"
 )
 
@@ -53,20 +54,27 @@ type Review struct {
 	State  string `json:"state"`
 }
 
+type File struct {
+	Path string `json:"path"`
+}
+
 type PullRequest struct {
-	Number         int       `json:"number"`
-	Title          string    `json:"title"`
-	Body           string    `json:"body"`
-	State          string    `json:"state"`
-	IsDraft        bool      `json:"isDraft"`
-	ReviewDecision string    `json:"reviewDecision"`
-	HeadRefName    string    `json:"headRefName"`
-	BaseRefName    string    `json:"baseRefName"`
-	URL            string    `json:"url"`
-	Author         User      `json:"author"`
-	Labels         []Label   `json:"labels"`
-	Comments       []Comment `json:"comments"`
-	Reviews        []Review  `json:"reviews"`
+	Number           int       `json:"number"`
+	Title            string    `json:"title"`
+	Body             string    `json:"body"`
+	State            string    `json:"state"`
+	IsDraft          bool      `json:"isDraft"`
+	ReviewDecision   string    `json:"reviewDecision"`
+	Mergeable        string    `json:"mergeable"`
+	MergeStateStatus string    `json:"mergeStateStatus"`
+	HeadRefName      string    `json:"headRefName"`
+	BaseRefName      string    `json:"baseRefName"`
+	URL              string    `json:"url"`
+	Author           User      `json:"author"`
+	Labels           []Label   `json:"labels"`
+	Comments         []Comment `json:"comments"`
+	Reviews          []Review  `json:"reviews"`
+	Files            []File    `json:"files"`
 }
 
 type commandRunner interface {
@@ -86,16 +94,17 @@ func (ghCommandRunner) Run(ctx context.Context, dir string, args ...string) ([]b
 }
 
 type Workflow struct {
-	dir           string
-	workspaceName string
-	runner        commandRunner
-	PR            PullRequest
-	Phase         Phase
-	publishFix    func(context.Context, string) error
+	dir             string
+	workspaceName   string
+	runner          commandRunner
+	PR              PullRequest
+	Phase           Phase
+	publishFix      func(context.Context, string) error
+	publishConflict func(context.Context, string) error
 }
 
 func List(ctx context.Context, workingDir string) ([]PullRequest, error) {
-	raw, err := ghCommandRunner{}.Run(ctx, workingDir, "pr", "list", "--state", "all", "--limit", "100", "--json", "number,title,state,isDraft,reviewDecision,headRefName,baseRefName,url")
+	raw, err := ghCommandRunner{}.Run(ctx, workingDir, "pr", "list", "--state", "all", "--limit", "100", "--json", "number,title,state,isDraft,reviewDecision,mergeable,mergeStateStatus,headRefName,baseRefName,url,labels")
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +123,7 @@ func load(ctx context.Context, workingDir string, number int, workspaceName stri
 	if number < 1 {
 		return nil, errors.New("pull request number must be greater than zero")
 	}
-	raw, err := runner.Run(ctx, workingDir, "pr", "view", strconv.Itoa(number), "--json", "number,title,body,state,isDraft,reviewDecision,headRefName,baseRefName,url,author,labels,comments,reviews")
+	raw, err := runner.Run(ctx, workingDir, "pr", "view", strconv.Itoa(number), "--json", "number,title,body,state,isDraft,reviewDecision,mergeable,mergeStateStatus,headRefName,baseRefName,url,author,labels,comments,reviews,files")
 	if err != nil {
 		return nil, err
 	}
@@ -125,19 +134,42 @@ func load(ctx context.Context, workingDir string, number int, workspaceName stri
 	if isClosed(pr.State) {
 		return nil, fmt.Errorf("PR #%dは%sです", number, strings.ToUpper(pr.State))
 	}
-	return &Workflow{dir: workingDir, workspaceName: workspaceName, runner: runner, PR: pr, Phase: PhaseReview}, nil
+	phase := PhaseReview
+	if HasConflict(pr) {
+		phase = PhaseConflict
+	}
+	return &Workflow{dir: workingDir, workspaceName: workspaceName, runner: runner, PR: pr, Phase: phase}, nil
 }
 
 func (w *Workflow) SetFixPublisher(publisher func(context.Context, string) error) {
 	w.publishFix = publisher
 }
 
+func (w *Workflow) SetConflictPublisher(publisher func(context.Context, string) error) {
+	w.publishConflict = publisher
+}
+
 func (w *Workflow) Prompt() string {
+	if w.Phase == PhaseConflict {
+		return w.ConflictPrompt("")
+	}
 	return strings.Join([]string{
 		"以下のGitHub Pull Requestをレビューしてください。",
 		"リポジトリのreview-pull-requestスキルに従い、差分、関連Issue、テスト結果を確認してください。",
 		"", "Pull Request情報:", w.Context(),
 	}, "\n")
+}
+
+func (w *Workflow) ConflictPrompt(feedback string) string {
+	lines := []string{
+		"以下のGitHub Pull Requestのコンフリクトを解消してください。",
+		"リポジトリのresolve-pr-conflictsスキルに従い、競合ファイル、関連PR、head/baseブランチと双方に対応するIssueの要件を確認してください。",
+		"両方の変更意図を維持して競合を解消し、必要なテストを実行してください。",
+	}
+	if strings.TrimSpace(feedback) != "" {
+		lines = append(lines, "", "追加指示:", strings.TrimSpace(feedback))
+	}
+	return strings.Join(append(lines, "", "Pull Request情報:", w.Context()), "\n")
 }
 
 func (w *Workflow) RevisionPrompt(feedback string) string {
@@ -161,6 +193,7 @@ func (w *Workflow) Context() string {
 		fmt.Sprintf("PR: #%d %s", w.PR.Number, strings.TrimSpace(w.PR.Title)),
 		"URL: " + strings.TrimSpace(w.PR.URL),
 		fmt.Sprintf("State: %s / Review: %s / Draft: %t", w.PR.State, w.PR.ReviewDecision, w.PR.IsDraft),
+		fmt.Sprintf("Mergeable: %s / Merge state: %s", w.PR.Mergeable, w.PR.MergeStateStatus),
 		fmt.Sprintf("Branch: %s -> %s", w.PR.HeadRefName, w.PR.BaseRefName),
 		"Author: " + w.PR.Author.Login, "", "Body:", strings.TrimSpace(w.PR.Body),
 	}
@@ -176,6 +209,12 @@ func (w *Workflow) Context() string {
 			lines = append(lines, fmt.Sprintf("- %s [%s]: %s", review.Author.Login, review.State, strings.TrimSpace(review.Body)))
 		}
 	}
+	if len(w.PR.Files) > 0 {
+		lines = append(lines, "", "Files:")
+		for _, file := range w.PR.Files {
+			lines = append(lines, "- "+file.Path)
+		}
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -183,6 +222,8 @@ func (w *Workflow) Start(ctx context.Context) error {
 	label := "state:review_running"
 	if w.Phase == PhaseFix {
 		label = "state:review_fix_implementation_running"
+	} else if w.Phase == PhaseConflict {
+		label = "state:pr_conflict_running"
 	}
 	return w.setStateLabel(ctx, label)
 }
@@ -193,6 +234,8 @@ func (w *Workflow) Finish(ctx context.Context, runErr error) error {
 		label = "state:review_ready"
 		if w.Phase == PhaseFix {
 			label = "state:review_fix_implementation_ready"
+		} else if w.Phase == PhaseConflict {
+			label = "state:pr_conflict_ready"
 		}
 	}
 	return w.setStateLabel(ctx, label)
@@ -210,6 +253,8 @@ func (w *Workflow) SaveResult(result string) (string, error) {
 	subdir := "review"
 	if w.Phase == PhaseFix {
 		subdir = "review_fix_implementation"
+	} else if w.Phase == PhaseConflict {
+		subdir = "pr_conflict"
 	}
 	path := filepath.Join(w.dir, workspace, subdir, fmt.Sprintf("%d_%s.md", w.PR.Number, sanitizePart(w.PR.Title)))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -252,6 +297,24 @@ func (w *Workflow) ApproveFix(ctx context.Context, result string) error {
 		return err
 	}
 	return w.setStateLabel(ctx, "state:review_fixed")
+}
+
+func (w *Workflow) ApproveConflict(ctx context.Context, result string) error {
+	if w.publishConflict == nil {
+		return errors.New("conflict publisher is not configured")
+	}
+	if err := w.publishConflict(ctx, result); err != nil {
+		return err
+	}
+	if err := w.comment(ctx, result); err != nil {
+		return err
+	}
+	return w.setStateLabel(ctx, "state:pr_conflict_resolved")
+}
+
+func HasConflict(pr PullRequest) bool {
+	return strings.EqualFold(strings.TrimSpace(pr.Mergeable), "CONFLICTING") ||
+		strings.EqualFold(strings.TrimSpace(pr.MergeStateStatus), "DIRTY")
 }
 
 func (w *Workflow) CompleteIfClosed(ctx context.Context) (bool, string, error) {

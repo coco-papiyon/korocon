@@ -80,24 +80,37 @@ func TestSelectPullRequestDisplaysStatusAndLoadsSelectedNumber(t *testing.T) {
 	listPullRequests = func(context.Context, string) ([]prworkflow.PullRequest, error) {
 		return []prworkflow.PullRequest{
 			{Number: 3, Title: "Merged", State: "MERGED", ReviewDecision: "APPROVED", HeadRefName: "feature/3", BaseRefName: "main"},
-			{Number: 4, Title: "Draft", State: "OPEN", IsDraft: true, HeadRefName: "feature/4", BaseRefName: "develop"},
+			{Number: 4, Title: "Draft", State: "OPEN", IsDraft: true, Labels: []prworkflow.Label{{Name: "state:review_approved"}}, HeadRefName: "feature/4", BaseRefName: "develop"},
+			{Number: 5, Title: "Review", State: "OPEN", Labels: []prworkflow.Label{{Name: "state:review_approved"}}, HeadRefName: "feature/5", BaseRefName: "main"},
+			{Number: 6, Title: "Conflict", State: "OPEN", Mergeable: "CONFLICTING", Labels: []prworkflow.Label{{Name: "state:pr_review_comment"}}, HeadRefName: "feature/6", BaseRefName: "main"},
 		}, nil
 	}
 	loaded := 0
 	loadPullRequest = func(_ context.Context, _ string, number int, _ string) (*prworkflow.Workflow, error) {
 		loaded = number
-		return &prworkflow.Workflow{PR: prworkflow.PullRequest{Number: number, Title: "Draft", State: "OPEN", HeadRefName: "feature/4", BaseRefName: "develop"}, Phase: prworkflow.PhaseReview}, nil
+		return &prworkflow.Workflow{PR: prworkflow.PullRequest{Number: number, Title: "Conflict", State: "OPEN", Mergeable: "CONFLICTING", HeadRefName: "feature/6", BaseRefName: "main"}, Phase: prworkflow.PhaseConflict}, nil
 	}
 	var out strings.Builder
-	selected, err := selectPullRequest(context.Background(), bufio.NewReader(strings.NewReader("4\n")), &out, ".", ".workspace")
+	selected, err := selectPullRequest(context.Background(), bufio.NewReader(strings.NewReader("6\n")), &out, ".", ".workspace")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded != 4 || selected.PR.Number != 4 {
+	if loaded != 6 || selected.PR.Number != 6 || selected.Phase != prworkflow.PhaseConflict {
 		t.Fatalf("loaded=%d selected=%+v", loaded, selected.PR)
 	}
-	if !strings.Contains(out.String(), "#4 [OPEN/DRAFT] [REVIEWなし]") || !strings.Contains(out.String(), "#3 [MERGED] [APPROVED]") {
-		t.Fatalf("output = %q", out.String())
+	tableOutput := strings.Split(out.String(), "\nPR番号")[0]
+	if !strings.Contains(tableOutput, "番号") || !strings.Contains(tableOutput, "状態") || !strings.Contains(tableOutput, "タイトル") ||
+		strings.Contains(tableOutput, "Merged") || strings.Contains(tableOutput, "Draft") ||
+		strings.Contains(tableOutput, "APPROVED") || !strings.Contains(tableOutput, "5     レビュー承認済み") ||
+		!strings.Contains(tableOutput, "6     コンフリクト") {
+		t.Fatalf("output = %q", tableOutput)
+	}
+}
+
+func TestPullRequestStatusUsesJapaneseStateLabel(t *testing.T) {
+	status := pullRequestStatus(prworkflow.PullRequest{State: "OPEN", Labels: []prworkflow.Label{{Name: "state:review_approved"}}})
+	if status != "レビュー承認済み" {
+		t.Fatalf("status = %q", status)
 	}
 }
 

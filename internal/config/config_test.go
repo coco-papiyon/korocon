@@ -140,6 +140,20 @@ func TestLoadFileReadsBaseBranch(t *testing.T) {
 	}
 }
 
+func TestLoadFileReadsStartupCommand(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, []byte("{\"startupCommand\":\"  go run ./cmd/app\\r\\n\"}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configured, err := loadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured.StartupCommand != "go run ./cmd/app" {
+		t.Fatalf("startupCommand = %q", configured.StartupCommand)
+	}
+}
+
 func TestLoadFileCapsImplementationLoopCount(t *testing.T) {
 	path := filepath.Join(t.TempDir(), FileName)
 	if err := os.WriteFile(path, []byte(`{"implementationLoopCount":20}`), 0o600); err != nil {

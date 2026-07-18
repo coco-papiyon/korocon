@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -11,17 +12,19 @@ import (
 )
 
 type fakePRWorkflow struct {
-	phase       prworkflow.Phase
-	completed   bool
-	state       string
-	approved    string
-	changes     string
-	fixApproved string
+	phase            prworkflow.Phase
+	completed        bool
+	state            string
+	approved         string
+	changes          string
+	fixApproved      string
+	conflictApproved string
 }
 
 func (w *fakePRWorkflow) Prompt() string                      { return "review prompt" }
 func (w *fakePRWorkflow) RevisionPrompt(s string) string      { return "rerun: " + s }
 func (w *fakePRWorkflow) FixPrompt(s string) string           { return "fix: " + s }
+func (w *fakePRWorkflow) ConflictPrompt(s string) string      { return "conflict: " + s }
 func (w *fakePRWorkflow) Start(context.Context) error         { return nil }
 func (w *fakePRWorkflow) Finish(context.Context, error) error { return nil }
 func (w *fakePRWorkflow) SaveResult(string) (string, error)   { return ".workspace/review/4_pr.md", nil }
@@ -43,6 +46,10 @@ func (w *fakePRWorkflow) ApproveFix(_ context.Context, result string) error {
 	w.fixApproved = result
 	return nil
 }
+func (w *fakePRWorkflow) ApproveConflict(_ context.Context, result string) error {
+	w.conflictApproved = result
+	return nil
+}
 
 func completePRJob(t *testing.T, controller *prReviewController, prompt, result string) {
 	t.Helper()
@@ -57,10 +64,17 @@ func completePRJob(t *testing.T, controller *prReviewController, prompt, result 
 func TestPRReviewApprovalMovesToVerificationAndCompletesWhenClosed(t *testing.T) {
 	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
 	var out bytes.Buffer
-	controller := newPRReviewController(workflow, &out, nil, nil)
+	started, closed := 0, 0
+	controller := newPRReviewController(workflow, &out, nil, nil, nil, func(context.Context) (string, error) {
+		started++
+		return "go run ./cmd/app", nil
+	}, func() error {
+		closed++
+		return nil
+	})
 	completePRJob(t, controller, workflow.Prompt(), "review result")
 	action, err := controller.HandleInput(context.Background(), "")
-	if err != nil || !action.Handled || workflow.phase != prworkflow.PhaseVerification || workflow.approved != "review result" {
+	if err != nil || !action.Handled || action.Restart || workflow.phase != prworkflow.PhaseVerification || workflow.approved != "review result" || started != 1 {
 		t.Fatalf("action=%+v workflow=%+v err=%v", action, workflow, err)
 	}
 	workflow.completed, workflow.state = false, "OPEN"
@@ -70,7 +84,7 @@ func TestPRReviewApprovalMovesToVerificationAndCompletesWhenClosed(t *testing.T)
 	}
 	workflow.completed, workflow.state = true, "MERGED"
 	action, err = controller.HandleInput(context.Background(), "/check")
-	if err != nil || !action.Restart || !strings.Contains(out.String(), "処理を完了しました") {
+	if err != nil || !action.Restart || closed != 1 || !strings.Contains(out.String(), "処理を完了しました") {
 		t.Fatalf("action=%+v output=%q err=%v", action, out.String(), err)
 	}
 }
@@ -78,10 +92,10 @@ func TestPRReviewApprovalMovesToVerificationAndCompletesWhenClosed(t *testing.T)
 func TestPRFixApprovalClosesFixSessionAndRerunsReview(t *testing.T) {
 	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
 	closed := 0
-	controller := newPRReviewController(workflow, &bytes.Buffer{}, func(prompt string) *daemon.JobSpec { return &daemon.JobSpec{Prompt: prompt} }, func() error {
+	controller := newPRReviewController(workflow, &bytes.Buffer{}, func(prompt string) *daemon.JobSpec { return &daemon.JobSpec{Prompt: prompt} }, nil, func() error {
 		closed++
 		return nil
-	})
+	}, nil, nil)
 	completePRJob(t, controller, workflow.Prompt(), "review result")
 	fixAction, err := controller.HandleInput(context.Background(), "修正してください")
 	if err != nil || fixAction.Job == nil {
@@ -101,7 +115,7 @@ func TestPRFixApprovalClosesFixSessionAndRerunsReview(t *testing.T) {
 
 func TestPRReviewRerunAndFixInstruction(t *testing.T) {
 	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
-	controller := newPRReviewController(workflow, &bytes.Buffer{}, func(prompt string) *daemon.JobSpec { return &daemon.JobSpec{Prompt: prompt} }, nil)
+	controller := newPRReviewController(workflow, &bytes.Buffer{}, func(prompt string) *daemon.JobSpec { return &daemon.JobSpec{Prompt: prompt} }, nil, nil, nil, nil)
 	completePRJob(t, controller, workflow.Prompt(), "review result")
 	action, err := controller.HandleInput(context.Background(), "/rerun focus tests")
 	if err != nil || action.Prompt != "rerun: focus tests" {
@@ -114,5 +128,51 @@ func TestPRReviewRerunAndFixInstruction(t *testing.T) {
 	}
 	if workflow.changes != "review result 2:テストを追加してください" {
 		t.Fatalf("changes = %q", workflow.changes)
+	}
+}
+
+func TestPRReviewApprovalWithoutStartupCommandReturnsToSelection(t *testing.T) {
+	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
+	var out bytes.Buffer
+	controller := newPRReviewController(workflow, &out, nil, nil, nil, nil, nil)
+	completePRJob(t, controller, workflow.Prompt(), "review result")
+	action, err := controller.HandleInput(context.Background(), "approve")
+	if err != nil || !action.Handled || !action.Restart || workflow.approved != "review result" {
+		t.Fatalf("action=%+v workflow=%+v err=%v", action, workflow, err)
+	}
+	if !strings.Contains(out.String(), "動作確認コマンドが設定されていないため、PR処理を終了します") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestPRReviewKeepsApprovalPendingWhenStartupCommandFails(t *testing.T) {
+	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
+	controller := newPRReviewController(workflow, &bytes.Buffer{}, nil, nil, nil, func(context.Context) (string, error) {
+		return "", errors.New("start failed")
+	}, nil)
+	completePRJob(t, controller, workflow.Prompt(), "review result")
+	action, err := controller.HandleInput(context.Background(), "approve")
+	if err == nil || !action.Handled || action.Restart || workflow.approved != "" || workflow.phase != prworkflow.PhaseReview {
+		t.Fatalf("action=%+v workflow=%+v err=%v", action, workflow, err)
+	}
+}
+
+func TestPRConflictApprovalPublishesAndReturnsToSelection(t *testing.T) {
+	workflow := &fakePRWorkflow{phase: prworkflow.PhaseConflict}
+	closed := 0
+	controller := newPRReviewController(workflow, &bytes.Buffer{}, nil, func(prompt string) *daemon.JobSpec {
+		return &daemon.JobSpec{Prompt: prompt}
+	}, func() error {
+		closed++
+		return nil
+	}, nil, nil)
+	job := controller.InitialJob()
+	if job == nil || !strings.Contains(job.Prompt, "conflict") {
+		t.Fatalf("initial job = %+v", job)
+	}
+	completePRJob(t, controller, job.Prompt, "conflict result")
+	action, err := controller.HandleInput(context.Background(), "approve")
+	if err != nil || !action.Handled || !action.Restart || workflow.conflictApproved != "conflict result" || closed != 1 {
+		t.Fatalf("action=%+v workflow=%+v closed=%d err=%v", action, workflow, closed, err)
 	}
 }

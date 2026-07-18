@@ -13,40 +13,59 @@ import (
 )
 
 type prReviewController struct {
-	mu       sync.Mutex
-	workflow prWorkflow
-	out      io.Writer
-	fixJob   func(string) *daemon.JobSpec
-	closeFix func() error
-	prompts  map[string]int
-	jobs     map[uint64]struct{}
-	pending  bool
-	result   string
+	mu                sync.Mutex
+	workflow          prWorkflow
+	out               io.Writer
+	fixJob            func(string) *daemon.JobSpec
+	conflictJob       func(string) *daemon.JobSpec
+	closeFix          func() error
+	startVerification func(context.Context) (string, error)
+	closeVerification func() error
+	prompts           map[string]int
+	jobs              map[uint64]struct{}
+	pending           bool
+	result            string
 }
 
 type prWorkflow interface {
 	Prompt() string
 	RevisionPrompt(string) string
 	FixPrompt(string) string
+	ConflictPrompt(string) string
 	Start(context.Context) error
 	Finish(context.Context, error) error
 	SaveResult(string) (string, error)
 	ApproveReview(context.Context, string) error
 	RequestChanges(context.Context, string, string) error
 	ApproveFix(context.Context, string) error
+	ApproveConflict(context.Context, string) error
 	CompleteIfClosed(context.Context) (bool, string, error)
 	SetPhase(prworkflow.Phase)
 	CurrentPhase() prworkflow.Phase
 	Number() int
 }
 
-func newPRReviewController(workflow prWorkflow, out io.Writer, fixJob func(string) *daemon.JobSpec, closeFix func() error) *prReviewController {
-	c := &prReviewController{workflow: workflow, out: out, fixJob: fixJob, closeFix: closeFix, prompts: make(map[string]int), jobs: make(map[uint64]struct{})}
-	c.prompts[workflow.Prompt()]++
+func newPRReviewController(workflow prWorkflow, out io.Writer, fixJob, conflictJob func(string) *daemon.JobSpec, closeFix func() error, startVerification func(context.Context) (string, error), closeVerification func() error) *prReviewController {
+	c := &prReviewController{workflow: workflow, out: out, fixJob: fixJob, conflictJob: conflictJob, closeFix: closeFix, startVerification: startVerification, closeVerification: closeVerification, prompts: make(map[string]int), jobs: make(map[uint64]struct{})}
+	c.prompts[c.initialPrompt()]++
 	return c
 }
 
-func (c *prReviewController) InitialPrompt() string { return c.workflow.Prompt() }
+func (c *prReviewController) InitialPrompt() string { return c.initialPrompt() }
+
+func (c *prReviewController) initialPrompt() string {
+	if c.workflow.CurrentPhase() == prworkflow.PhaseConflict {
+		return c.workflow.ConflictPrompt("")
+	}
+	return c.workflow.Prompt()
+}
+
+func (c *prReviewController) InitialJob() *daemon.JobSpec {
+	if c.workflow.CurrentPhase() != prworkflow.PhaseConflict || c.conflictJob == nil {
+		return nil
+	}
+	return c.conflictJob(c.initialPrompt())
+}
 
 func (c *prReviewController) OnJobStart(ctx context.Context, id uint64, prompt string) error {
 	c.mu.Lock()
@@ -94,6 +113,8 @@ func (c *prReviewController) OnJobFinish(ctx context.Context, id uint64, _ strin
 	phase := "レビュー"
 	if c.workflow.CurrentPhase() == prworkflow.PhaseFix {
 		phase = "レビュー指摘修正"
+	} else if c.workflow.CurrentPhase() == prworkflow.PhaseConflict {
+		phase = "コンフリクト解消"
 	}
 	_, err := fmt.Fprintf(c.out, "\n\n---\n\n%s結果を保存しました: %s\n%sが完了しました。承認する場合は未入力状態でEnter、もしくは承認、approve、aのいずれかを入力してください。\n", phase, artifact, phase)
 	if c.workflow.CurrentPhase() == prworkflow.PhaseReview {
@@ -123,6 +144,9 @@ func (c *prReviewController) HandleInput(ctx context.Context, input string) (dae
 			return daemon.InputAction{Handled: true}, err
 		}
 		_, err = fmt.Fprintf(c.out, "PR #%dが%sになったため、処理を完了しました。\n", c.workflow.Number(), state)
+		if c.closeVerification != nil {
+			err = errors.Join(err, c.closeVerification())
+		}
 		if c.closeFix != nil {
 			err = errors.Join(err, c.closeFix())
 		}
@@ -133,6 +157,22 @@ func (c *prReviewController) HandleInput(ctx context.Context, input string) (dae
 	}
 
 	trimmed := strings.TrimSpace(input)
+	if c.workflow.CurrentPhase() == prworkflow.PhaseConflict {
+		if isApprovalInput(input) {
+			if err := c.workflow.ApproveConflict(ctx, result); err != nil {
+				return daemon.InputAction{Handled: true}, err
+			}
+			c.mu.Lock()
+			c.pending, c.result = false, ""
+			c.mu.Unlock()
+			_, err := fmt.Fprintln(c.out, "コンフリクト解消を承認してPR headへpushしました。PR処理を終了します。")
+			if c.closeFix != nil {
+				err = errors.Join(err, c.closeFix())
+			}
+			return daemon.InputAction{Handled: true, Restart: true}, err
+		}
+		return c.enqueueConflict(c.workflow.ConflictPrompt(input), "追加指示をAIへ送信し、コンフリクト解消を再実行します。")
+	}
 	if c.workflow.CurrentPhase() == prworkflow.PhaseReview {
 		fields := strings.Fields(trimmed)
 		command := ""
@@ -148,14 +188,32 @@ func (c *prReviewController) HandleInput(ctx context.Context, input string) (dae
 			return c.enqueue(prompt, false, "レビューを再実行します。")
 		}
 		if isApprovalInput(input) {
+			verification := ""
+			if c.startVerification != nil {
+				var err error
+				verification, err = c.startVerification(ctx)
+				if err != nil {
+					return daemon.InputAction{Handled: true}, fmt.Errorf("動作確認コマンドの起動に失敗しました: %w", err)
+				}
+			}
 			if err := c.workflow.ApproveReview(ctx, result); err != nil {
+				if c.closeVerification != nil && c.startVerification != nil {
+					_ = c.closeVerification()
+				}
 				return daemon.InputAction{Handled: true}, err
 			}
 			c.mu.Lock()
 			c.pending, c.result = false, ""
 			c.workflow.SetPhase(prworkflow.PhaseVerification)
 			c.mu.Unlock()
-			_, err := fmt.Fprintln(c.out, "レビューを承認しました。動作確認を行い、PRをクローズしてください。完了後、未入力状態でEnterまたは/checkを入力してください。")
+			if c.startVerification == nil {
+				_, err := fmt.Fprintln(c.out, "レビューを承認しました。動作確認コマンドが設定されていないため、PR処理を終了します。")
+				if c.closeFix != nil {
+					err = errors.Join(err, c.closeFix())
+				}
+				return daemon.InputAction{Handled: true, Restart: true}, err
+			}
+			_, err := fmt.Fprintf(c.out, "レビューを承認しました。動作確認コマンドを起動しました: %s\n動作確認後にPRをクローズし、未入力状態でEnterまたは/checkを入力してください。\n", verification)
 			return daemon.InputAction{Handled: true}, err
 		}
 		instruction := trimmed
@@ -185,6 +243,18 @@ func (c *prReviewController) HandleInput(ctx context.Context, input string) (dae
 		return c.enqueue(c.workflow.Prompt(), false, "レビュー指摘修正を承認してpushしました。PRを再レビューします。")
 	}
 	return c.enqueue(c.workflow.FixPrompt(input), true, "追加指示をAIへ送信し、レビュー指摘修正を再実行します。")
+}
+
+func (c *prReviewController) enqueueConflict(prompt, message string) (daemon.InputAction, error) {
+	c.mu.Lock()
+	c.pending, c.result = false, ""
+	c.prompts[prompt]++
+	c.mu.Unlock()
+	_, err := fmt.Fprintln(c.out, message)
+	if c.conflictJob == nil {
+		return daemon.InputAction{Handled: true}, errors.New("conflict resolution job is not configured")
+	}
+	return daemon.InputAction{Handled: true, Job: c.conflictJob(prompt)}, err
 }
 
 func (c *prReviewController) enqueue(prompt string, fix bool, message string) (daemon.InputAction, error) {

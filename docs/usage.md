@@ -38,6 +38,7 @@ tools/
   "verifierModel": "gpt-5.4-mini",
   "reviewerProvider": "copilot",
   "reviewerModel": "claude-sonnet-4.5",
+  "startupCommand": "go run ./cmd/app",
   "builtinAllowedCommands": ["go test", "git diff", "git status"]
 }
 ```
@@ -50,6 +51,7 @@ tools/
 | `implementationDirectory` | `../<リポジトリ名>-branches/` | 実装worktreeを置く親ディレクトリ。相対パスは対象リポジトリ基準で、`<リポジトリ名>`または`<repositoryName>`を置換します。 |
 | `implementationLoopCount` | `3` | 実装と検証の最大試行回数。最大10回です。 |
 | `baseBranch` | `main` | 実装承認時に作成するPRのbaseブランチです。 |
+| `startupCommand` | 未設定 | レビュー承認後にPR headのworktreeで自動起動する動作確認コマンドです。標準出力と標準エラーはログファイルへ記録します。 |
 | `builtinAllowedCommands` | korobokcleと同じ既定リスト | Codexのコマンド実行要求を自動承認するコマンドです。省略または空配列では既定リストを使用します。 |
 | `implementerProvider` | `codex` | 設計、実装、レビュー指摘修正を担当するProviderです。 |
 | `implementerModel` | `gpt-5.6-luna` | 実装者のModelです。 |
@@ -86,7 +88,7 @@ git pull --ff-only
 
 fetchまたはfast-forward pullに失敗した場合は、そのAIジョブを開始せず`[job N] 失敗`を表示します。自動mergeやrebaseは行いません。競合、未追跡ブランチ、認証・ネットワークエラーなどの原因を解消してからジョブを再投入してください。
 
-起動直後に、GitHubから取得する情報として`issue`または`pr`を選択します。`issue`の場合は続けてIssue番号を入力します。koroconは`gh issue view --json`で本文・ラベル・コメントなどを取得し、Issueの状態から設計または実装を判定してCodexへ初期ジョブとして投入します。`pr`の場合はOPEN/CLOSED/MERGED、Draft、レビュー判定を含むPR一覧を表示し、続けてPR番号を入力します。選択したOPENなPRの本文、ブランチ、コメント、レビューを取得してレビューを開始します。事前にGitHub CLI (`gh`) のログインを完了してください。
+起動直後に、GitHubから取得する情報として`issue`または`pr`を選択します。`issue`の場合は続けてIssue番号を入力します。koroconは`gh issue view --json`で本文・ラベル・コメントなどを取得し、Issueの状態から設計または実装を判定してCodexへ初期ジョブとして投入します。`pr`の場合は、番号、ステータス、タイトルを列とする表形式のPR一覧を表示し、`MERGED`またはDraftがtrueのPRは除外します。`state:*`ラベルがある場合は、工程ラベルを日本語ステータスへ変換して表示します。続けてPR番号を入力すると、選択したPRの本文、ブランチ、コメント、レビューを取得してレビューを開始します。事前にGitHub CLI (`gh`) のログインを完了してください。
 
 標準入力から実行する場合も、最初の行に`issue`または`pr`を指定します。
 
@@ -101,6 +103,10 @@ korocon --pr 4
 
 ### PRレビュー
 
+PRの`mergeable`が`CONFLICTING`、または`mergeStateStatus`が`DIRTY`の場合は、未レビューやレビュー修正状態よりコンフリクト判定を優先します。一覧のステータスには`コンフリクト`と表示し、選択するとレビューではなくコンフリクト解消を開始します。
+
+コンフリクト解消では実装者のProviderとModelを使用し、PR head用worktreeでbaseブランチのmergeを開始してから`resolve-pr-conflicts`スキルを実行します。競合ファイル、head/baseブランチ、双方に対応するIssueの意図を確認し、結果を`<workspaceName>/pr_conflict/<PR番号>_<正規化タイトル>.md`へ保存します。状態は`state:pr_conflict_running`、`state:pr_conflict_ready`、承認後の`state:pr_conflict_resolved`の順に遷移します。承認時に未解消ファイルと競合マーカーを検査し、merge commitをPR headへpushして最初のIssue/PR選択へ戻ります。
+
 PRレビューはリポジトリの`review-pull-request`スキルに従い、結果を`<workspaceName>/review/<PR番号>_<正規化タイトル>.md`へ保存します。実行中は`state:review_running`、確認待ちは`state:review_ready`です。
 
 レビュー結果の確認待ちでは次の入力を使用します。
@@ -113,7 +119,7 @@ PRレビューはリポジトリの`review-pull-request`スキルに従い、結
 
 レビュー修正指示はPRコメントへ投稿し、`state:pr_review_comment`へ更新します。修正ジョブは`../<リポジトリ名>-branches/<リポジトリ名>-pr-<PR番号>`へPR headのworktreeを作り、`review-comment-fix`スキルに従って設計検討、実装、テストを行います。結果は`<workspaceName>/review_fix_implementation/<PR番号>_<正規化タイトル>.md`へ保存します。承認すると変更をcommitしてPR headへpushし、`state:review_fixed`へ更新してレビューを再実行します。
 
-レビュー承認後は`state:review_approved`として動作確認を待ちます。動作確認を完了してPRをクローズまたはマージした後、未入力Enterまたは`/check`を入力します。PRがCLOSEDまたはMERGEDなら`state:completed`へ更新し、最初の`issue`/`pr`選択へ戻ります。OPENの場合は動作確認待ちを継続します。
+レビュー承認後、`startupCommand`が設定されていればコマンドを自動起動し、`state:review_approved`として動作確認を待ちます。動作確認を完了してPRをクローズまたはマージした後、未入力Enterまたは`/check`を入力します。PRがCLOSEDまたはMERGEDならコマンドを停止して`state:completed`へ更新し、最初の`issue`/`pr`選択へ戻ります。OPENの場合は動作確認待ちを継続します。`startupCommand`が未設定の場合はレビュー承認時点でPR処理を終了し、最初の選択へ戻ります。
 
 ### Issueの状態遷移
 

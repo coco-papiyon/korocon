@@ -20,6 +20,7 @@ type Config struct {
 	ImplementationDirectory string   `json:"implementationDirectory"`
 	ImplementationLoopCount int      `json:"implementationLoopCount"`
 	BaseBranch              string   `json:"baseBranch"`
+	StartupCommand          string   `json:"startupCommand,omitempty"`
 	BuiltinAllowedCommands  []string `json:"builtinAllowedCommands"`
 	ImplementerProvider     string   `json:"implementerProvider"`
 	ImplementerModel        string   `json:"implementerModel"`
@@ -125,6 +126,7 @@ func loadFile(path string) (Config, error) {
 	if configured.BaseBranch == "" {
 		configured.BaseBranch = "main"
 	}
+	configured.StartupCommand = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(configured.StartupCommand, "\r\n", "\n"), "\r", "\n"))
 	configured.BuiltinAllowedCommands = normalizeStringList(configured.BuiltinAllowedCommands)
 	if len(configured.BuiltinAllowedCommands) == 0 {
 		configured.BuiltinAllowedCommands = DefaultAllowedCommands()
