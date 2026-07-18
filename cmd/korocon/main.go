@@ -39,6 +39,8 @@ var loadIssue = issueworkflow.Load
 var currentGitHubUser = lookupCurrentGitHubUser
 var loadProjectMembership = fetchProjectMembership
 
+var errNoAutoTargets = errors.New("no automatic processing targets")
+
 type selectionMode string
 
 const (
@@ -147,6 +149,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 	projectOwner := fs.String("project-owner", "@me", "GitHub project owner login or organization")
 	projectStatus := fs.String("project-status", "", "GitHub Projects v2 Status value")
 	projectQuery := fs.String("project-query", "", "GitHub Projects v2 filter query")
+	autoMode := fs.Bool("auto", false, "process matching targets sequentially")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -173,6 +176,12 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 	}
 	if mode == selectionModeReviewer && issueSpecified {
 		return errors.New("--reviewer cannot be used with --issue")
+	}
+	if *autoMode && mode == selectionModeDefault {
+		return errors.New("--auto requires --implementer (-i) or --reviewer (-r)")
+	}
+	if *autoMode && (issueSpecified || prSpecified) {
+		return errors.New("--auto cannot be used with --issue or --pr")
 	}
 	assigneeFilter := strings.TrimSpace(*assigne)
 	assigneeSpecified := false
@@ -257,7 +266,13 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 		var selectedIssue *issueworkflow.Workflow
 		var selectedPR *prworkflow.Workflow
 		var err error
-		if requested.issueSpecified || requested.prSpecified {
+		if *autoMode {
+			selectedIssue, selectedPR, err = selectAutoGitHubInformation(ctx, stdout, *dir, configured.WorkspaceName, mode, assigneeFilter, activeFilters)
+			if errors.Is(err, errNoAutoTargets) {
+				_, writeErr := fmt.Fprintln(stdout, "フィルタに一致する自動処理対象がありません。")
+				return writeErr
+			}
+		} else if requested.issueSpecified || requested.prSpecified {
 			selectedIssue, selectedPR, err = selectRequestedGitHubInformationWithFilters(ctx, stdout, *dir, configured.WorkspaceName, requested, assigneeFilter, activeFilters)
 			requested = requestedGitHubInformation{}
 			if err != nil {
@@ -504,6 +519,43 @@ func selectRequestedGitHubInformationWithFilters(ctx context.Context, out io.Wri
 		return nil, selected, nil
 	}
 	return nil, nil, errors.New("IssueまたはPRが指定されていません")
+}
+
+func selectAutoGitHubInformation(ctx context.Context, out io.Writer, workingDir, workspaceName string, mode selectionMode, assigneeFilter string, filters githubSelectionFilters) (*issueworkflow.Workflow, *prworkflow.Workflow, error) {
+	if mode == selectionModeImplementer {
+		issues, err := listIssuesForSelection(ctx, workingDir, filters.Search)
+		if err != nil {
+			return nil, nil, fmt.Errorf("Issue一覧の取得に失敗しました: %w", err)
+		}
+		issues = slices.DeleteFunc(issues, func(issue issueworkflow.Issue) bool {
+			return !issueIsImplementerTarget(issue) || !assignedTo(issue.Assignees, assigneeFilter) || !matchesIssueFilters(issue, filters)
+		})
+		if len(issues) > 0 {
+			sort.Slice(issues, func(i, j int) bool { return issues[i].Number > issues[j].Number })
+			number := issues[0].Number
+			if _, err := fmt.Fprintf(out, "自動選択: Issue #%d %s\n", number, tableCell(issues[0].Title)); err != nil {
+				return nil, nil, err
+			}
+			return selectRequestedGitHubInformationWithFilters(ctx, out, workingDir, workspaceName, requestedGitHubInformation{issueSpecified: true, issueNumber: number}, assigneeFilter, filters)
+		}
+	}
+
+	prs, err := listPullRequestsForSelection(ctx, workingDir, filters.Search)
+	if err != nil {
+		return nil, nil, fmt.Errorf("PR一覧の取得に失敗しました: %w", err)
+	}
+	prs = slices.DeleteFunc(prs, func(pr prworkflow.PullRequest) bool {
+		return strings.EqualFold(strings.TrimSpace(pr.State), "MERGED") || pr.IsDraft || !pullRequestIsRoleTarget(pr, mode) || !assignedToPR(pr.Assignees, assigneeFilter) || !matchesPullRequestFilters(pr, filters)
+	})
+	if len(prs) == 0 {
+		return nil, nil, errNoAutoTargets
+	}
+	sort.Slice(prs, func(i, j int) bool { return prs[i].Number > prs[j].Number })
+	number := prs[0].Number
+	if _, err := fmt.Fprintf(out, "自動選択: PR #%d %s\n", number, tableCell(prs[0].Title)); err != nil {
+		return nil, nil, err
+	}
+	return selectRequestedGitHubInformationWithFilters(ctx, out, workingDir, workspaceName, requestedGitHubInformation{prSpecified: true, prNumber: number}, assigneeFilter, filters)
 }
 
 // selectGitHubInformation performs the small piece of setup that is needed
@@ -1170,6 +1222,7 @@ Run options:
   --project-owner OWNER project owner login or organization (default: @me)
   --project-status NAME GitHub Projects v2 Status value (requires --project)
   --project-query QUERY GitHub Projects v2 filter query (requires --project)
+  --auto                process matching targets sequentially (requires -i or -r)
 
 Interactive mode:
   Start one resident Codex process, send prompts through its stdin,

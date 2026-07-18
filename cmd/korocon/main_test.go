@@ -171,6 +171,67 @@ func TestGitHubSelectionFilters(t *testing.T) {
 	}
 }
 
+func TestAutoSelectionPrioritizesImplementerIssue(t *testing.T) {
+	originalIssues, originalPRs, originalLoadIssue := listIssues, listPullRequests, loadIssue
+	t.Cleanup(func() {
+		listIssues, listPullRequests, loadIssue = originalIssues, originalPRs, originalLoadIssue
+	})
+	listIssues = func(context.Context, string) ([]issueworkflow.Issue, error) {
+		return []issueworkflow.Issue{{Number: 3, Title: "Issue 3"}, {Number: 8, Title: "Issue 8"}}, nil
+	}
+	prListed := false
+	listPullRequests = func(context.Context, string) ([]prworkflow.PullRequest, error) {
+		prListed = true
+		return nil, nil
+	}
+	loadIssue = func(_ context.Context, _ string, number int, _ string) (*issueworkflow.Workflow, error) {
+		return &issueworkflow.Workflow{Issue: issueworkflow.Issue{Number: number, Title: "Selected"}, Phase: issueworkflow.PhaseDesign}, nil
+	}
+	issue, pr, err := selectAutoGitHubInformation(context.Background(), io.Discard, ".", ".workspace", selectionModeImplementer, "", githubSelectionFilters{})
+	if err != nil || issue == nil || issue.Issue.Number != 8 || pr != nil || prListed {
+		t.Fatalf("issue=%+v pr=%+v prListed=%t err=%v", issue, pr, prListed, err)
+	}
+}
+
+func TestAutoSelectionUsesHighestReviewerPR(t *testing.T) {
+	originalPRs, originalLoadPR := listPullRequests, loadPullRequest
+	t.Cleanup(func() { listPullRequests, loadPullRequest = originalPRs, originalLoadPR })
+	listPullRequests = func(context.Context, string) ([]prworkflow.PullRequest, error) {
+		return []prworkflow.PullRequest{
+			{Number: 4, Title: "PR 4", State: "OPEN", Labels: []prworkflow.Label{{Name: "state:pr_created"}}},
+			{Number: 9, Title: "PR 9", State: "OPEN", Labels: []prworkflow.Label{{Name: "state:pr_created"}}},
+		}, nil
+	}
+	loadPullRequest = func(_ context.Context, _ string, number int, _ string) (*prworkflow.Workflow, error) {
+		return &prworkflow.Workflow{PR: prworkflow.PullRequest{Number: number, Title: "Selected", State: "OPEN"}, Phase: prworkflow.PhaseReview}, nil
+	}
+	issue, pr, err := selectAutoGitHubInformation(context.Background(), io.Discard, ".", ".workspace", selectionModeReviewer, "", githubSelectionFilters{})
+	if err != nil || issue != nil || pr == nil || pr.PR.Number != 9 {
+		t.Fatalf("issue=%+v pr=%+v err=%v", issue, pr, err)
+	}
+}
+
+func TestAutoImplementerFallsBackToPullRequest(t *testing.T) {
+	originalIssues, originalPRs, originalLoadPR := listIssues, listPullRequests, loadPullRequest
+	t.Cleanup(func() {
+		listIssues, listPullRequests, loadPullRequest = originalIssues, originalPRs, originalLoadPR
+	})
+	listIssues = func(context.Context, string) ([]issueworkflow.Issue, error) { return nil, nil }
+	listPullRequests = func(context.Context, string) ([]prworkflow.PullRequest, error) {
+		return []prworkflow.PullRequest{{
+			Number: 7, Title: "Fix review", State: "OPEN",
+			Labels: []prworkflow.Label{{Name: "state:pr_review_comment"}},
+		}}, nil
+	}
+	loadPullRequest = func(_ context.Context, _ string, number int, _ string) (*prworkflow.Workflow, error) {
+		return &prworkflow.Workflow{PR: prworkflow.PullRequest{Number: number, Title: "Selected", State: "OPEN"}, Phase: prworkflow.PhaseFix}, nil
+	}
+	issue, pr, err := selectAutoGitHubInformation(context.Background(), io.Discard, ".", ".workspace", selectionModeImplementer, "", githubSelectionFilters{})
+	if err != nil || issue != nil || pr == nil || pr.PR.Number != 7 {
+		t.Fatalf("issue=%+v pr=%+v err=%v", issue, pr, err)
+	}
+}
+
 func TestBuildProjectQuery(t *testing.T) {
 	tests := []struct {
 		status string
@@ -243,6 +304,13 @@ func TestRunInteractiveRejectsIssueAndPRTogether(t *testing.T) {
 func TestRunInteractiveRejectsShortRoleModesTogether(t *testing.T) {
 	err := runInteractive([]string{"-i", "-r"}, strings.NewReader(""), io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "cannot be specified together") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRunInteractiveRequiresRoleForAutoMode(t *testing.T) {
+	err := runInteractive([]string{"--auto"}, strings.NewReader(""), io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "requires --implementer") {
 		t.Fatalf("error = %v", err)
 	}
 }
