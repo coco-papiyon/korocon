@@ -71,7 +71,14 @@ type Session struct {
 }
 
 var appServerCommand = func(ctx context.Context, binary string) *exec.Cmd {
-	return exec.CommandContext(ctx, binary, "app-server", "--stdio")
+	return exec.CommandContext(ctx, binary, appServerArgs()...)
+}
+
+func appServerArgs() []string {
+	return []string{
+		"--config", "sandbox_workspace_write.network_access=true",
+		"app-server", "--stdio",
+	}
 }
 
 // StartSession starts Codex once and initializes a resident conversation.

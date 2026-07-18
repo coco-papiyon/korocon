@@ -25,6 +25,7 @@ type prReviewController struct {
 	jobs              map[uint64]struct{}
 	pending           bool
 	result            string
+	awaitingFixInput  bool
 }
 
 type prWorkflow interface {
@@ -47,7 +48,11 @@ type prWorkflow interface {
 
 func newPRReviewController(workflow prWorkflow, out io.Writer, fixJob, conflictJob func(string) *daemon.JobSpec, closeFix func() error, startVerification func(context.Context) (string, error), closeVerification func() error) *prReviewController {
 	c := &prReviewController{workflow: workflow, out: out, fixJob: fixJob, conflictJob: conflictJob, closeFix: closeFix, startVerification: startVerification, closeVerification: closeVerification, prompts: make(map[string]int), jobs: make(map[uint64]struct{})}
-	c.prompts[c.initialPrompt()]++
+	if workflow.CurrentPhase() == prworkflow.PhaseFix {
+		c.awaitingFixInput = true
+	} else {
+		c.prompts[c.initialPrompt()]++
+	}
 	return c
 }
 
@@ -61,7 +66,7 @@ func (c *prReviewController) initialPrompt() string {
 		return c.workflow.ConflictPrompt("")
 	}
 	if c.workflow.CurrentPhase() == prworkflow.PhaseFix {
-		return c.workflow.FixPrompt("")
+		return ""
 	}
 	return c.workflow.Prompt()
 }
@@ -71,10 +76,6 @@ func (c *prReviewController) InitialJob() *daemon.JobSpec {
 	case prworkflow.PhaseConflict:
 		if c.conflictJob != nil {
 			return c.conflictJob(c.initialPrompt())
-		}
-	case prworkflow.PhaseFix:
-		if c.fixJob != nil {
-			return c.fixJob(c.initialPrompt())
 		}
 	}
 	return nil
@@ -200,6 +201,17 @@ func (c *prReviewController) HandleInput(ctx context.Context, input string) (dae
 		}
 		c.workflow.SetPhase(prworkflow.PhaseReview)
 		return c.enqueue(c.workflow.RevisionPrompt(strings.TrimSpace(input)), false, "レビュー承認済みPRのレビューを再実行します。")
+	}
+	if c.workflow.CurrentPhase() == prworkflow.PhaseFix && c.awaitingFixInput {
+		instruction := strings.TrimSpace(input)
+		if instruction == "" {
+			_, err := fmt.Fprintln(c.out, "レビュー指摘内容を確認し、修正する指摘と修正不要な指摘を入力してください。")
+			return daemon.InputAction{Handled: true}, err
+		}
+		c.mu.Lock()
+		c.awaitingFixInput = false
+		c.mu.Unlock()
+		return c.enqueue(c.workflow.FixPrompt(instruction), true, "修正指示をAIへ送信し、実装・検証を開始します。")
 	}
 	if !pending {
 		return daemon.InputAction{}, nil

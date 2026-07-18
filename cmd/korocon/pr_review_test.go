@@ -91,17 +91,21 @@ func TestPRReviewApprovalMovesToVerificationAndCompletesWhenClosed(t *testing.T)
 
 func TestPRFixRunsAsSeparateJobAndReturnsToSelectionAfterApproval(t *testing.T) {
 	workflow := &fakePRWorkflow{phase: prworkflow.PhaseFix}
+	var out bytes.Buffer
 	closed := 0
-	controller := newPRReviewController(workflow, &bytes.Buffer{}, func(prompt string) *daemon.JobSpec { return &daemon.JobSpec{Prompt: prompt} }, nil, func() error {
+	controller := newPRReviewController(workflow, &out, func(prompt string) *daemon.JobSpec { return &daemon.JobSpec{Prompt: prompt} }, nil, func() error {
 		closed++
 		return nil
 	}, nil, nil)
-	fixJob := controller.InitialJob()
-	if fixJob == nil || !strings.Contains(fixJob.Prompt, "fix:") {
-		t.Fatalf("initial fix job=%+v", fixJob)
+	if controller.InitialJob() != nil || controller.InitialPrompt() != "" {
+		t.Fatalf("fix started before user instruction")
 	}
-	completePRJob(t, controller, fixJob.Prompt, "fixed result")
-	action, err := controller.HandleInput(context.Background(), "approve")
+	action, err := controller.HandleInput(context.Background(), "指摘Aを修正し、指摘Bは対応不要")
+	if err != nil || action.Job == nil || !strings.Contains(action.Job.Prompt, "指摘Aを修正") {
+		t.Fatalf("instruction action=%+v err=%v", action, err)
+	}
+	completePRJob(t, controller, action.Job.Prompt, "fixed result")
+	action, err = controller.HandleInput(context.Background(), "approve")
 	if err != nil || !action.Restart || action.Prompt != "" || workflow.fixApproved != "fixed result" || workflow.phase != prworkflow.PhaseFix || closed != 1 {
 		t.Fatalf("action=%+v workflow=%+v closed=%d err=%v", action, workflow, closed, err)
 	}

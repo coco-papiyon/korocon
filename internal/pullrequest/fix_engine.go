@@ -2,6 +2,7 @@ package pullrequest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,8 +20,13 @@ type FixConfig struct {
 	Provider                string
 	Binary                  string
 	Model                   string
+	VerifierProvider        string
+	VerifierBinary          string
+	VerifierModel           string
 	RepositoryDir           string
 	ImplementationDirectory string
+	WorkspaceName           string
+	LoopCount               int
 	Number                  int
 	Title                   string
 	HeadRefName             string
@@ -36,12 +42,36 @@ var startFixSession = func(ctx context.Context, cfg runner.SessionConfig) (runne
 type FixEngine struct {
 	cfg              FixConfig
 	mu               sync.Mutex
-	session          runner.AgentSession
+	implementer      runner.AgentSession
+	verifier         runner.AgentSession
 	worktree         string
 	conflictPrepared bool
 }
 
-func NewFixEngine(cfg FixConfig) *FixEngine { return &FixEngine{cfg: cfg} }
+type fixVerification struct {
+	Status   string `json:"status"`
+	Feedback string `json:"feedback"`
+	Summary  string `json:"summary"`
+}
+
+func NewFixEngine(cfg FixConfig) *FixEngine {
+	if strings.TrimSpace(cfg.WorkspaceName) == "" {
+		cfg.WorkspaceName = ".workspace"
+	}
+	if cfg.LoopCount <= 0 {
+		cfg.LoopCount = 3
+	}
+	if cfg.LoopCount > 10 {
+		cfg.LoopCount = 10
+	}
+	if strings.TrimSpace(cfg.VerifierProvider) == "" {
+		cfg.VerifierProvider = cfg.Provider
+	}
+	if strings.TrimSpace(cfg.VerifierModel) == "" {
+		cfg.VerifierModel = cfg.Model
+	}
+	return &FixEngine{cfg: cfg}
+}
 
 func (e *FixEngine) Run(ctx context.Context, prompt, model string, handler runner.ServerRequestHandler, setPhase func(string), onEvent func()) (runner.TurnResult, error) {
 	e.mu.Lock()
@@ -49,14 +79,53 @@ func (e *FixEngine) Run(ctx context.Context, prompt, model string, handler runne
 	if err := e.ensureStarted(ctx, model, handler); err != nil {
 		return runner.TurnResult{}, err
 	}
-	if setPhase != nil {
-		setPhase("レビュー指摘修正")
-	}
-	prompt = strings.Join([]string{prompt, "", "作業ディレクトリ: " + e.worktree, "PR headブランチ: " + e.cfg.HeadRefName, "作業ディレクトリ内を直接修正し、必要なテストを実行してください。"}, "\n")
 	if strings.TrimSpace(e.cfg.Model) != "" {
 		model = e.cfg.Model
 	}
-	return e.session.RunTurn(ctx, prompt, model, onEvent)
+	feedback := ""
+	tokens := 0
+	for attempt := 1; attempt <= e.cfg.LoopCount; attempt++ {
+		if setPhase != nil {
+			setPhase(fmt.Sprintf("レビュー修正 実装%d回目", attempt))
+		}
+		implementationPrompt := e.fixImplementationPrompt(prompt, feedback, attempt)
+		implemented, err := e.implementer.RunTurn(ctx, implementationPrompt, model, onEvent)
+		if err != nil {
+			return runner.TurnResult{}, fmt.Errorf("review fix implementation attempt %d: %w", attempt, err)
+		}
+		if err := e.saveFixAttempt(attempt, false, implemented.Text); err != nil {
+			return runner.TurnResult{}, err
+		}
+		tokens += implemented.Tokens
+
+		if setPhase != nil {
+			setPhase(fmt.Sprintf("レビュー修正 検証%d回目", attempt))
+		}
+		checked, err := e.verifier.RunTurn(ctx, e.fixVerificationPrompt(prompt, implemented.Text, attempt), e.cfg.VerifierModel, onEvent)
+		if err != nil {
+			return runner.TurnResult{}, fmt.Errorf("review fix verification attempt %d: %w", attempt, err)
+		}
+		if err := e.saveFixAttempt(attempt, true, checked.Text); err != nil {
+			return runner.TurnResult{}, err
+		}
+		tokens += checked.Tokens
+		verdict, err := parseFixVerification(checked.Text)
+		if err != nil {
+			return runner.TurnResult{}, fmt.Errorf("review fix verification attempt %d: %w", attempt, err)
+		}
+		if verdict.Status == "passed" {
+			result := strings.TrimSpace(implemented.Text)
+			if strings.TrimSpace(verdict.Summary) != "" {
+				result += "\n\n## 検証者エージェントの判定\n" + strings.TrimSpace(verdict.Summary)
+			}
+			return runner.TurnResult{Text: result, Tokens: tokens}, nil
+		}
+		feedback = strings.TrimSpace(verdict.Feedback)
+		if feedback == "" {
+			feedback = strings.TrimSpace(verdict.Summary)
+		}
+	}
+	return runner.TurnResult{}, fmt.Errorf("review fix verification did not pass after %d attempts: %s", e.cfg.LoopCount, feedback)
 }
 
 func (e *FixEngine) RunConflict(ctx context.Context, prompt, model string, handler runner.ServerRequestHandler, setPhase func(string), onEvent func()) (runner.TurnResult, error) {
@@ -84,7 +153,7 @@ func (e *FixEngine) RunConflict(ctx context.Context, prompt, model string, handl
 	if strings.TrimSpace(e.cfg.Model) != "" {
 		model = e.cfg.Model
 	}
-	return e.session.RunTurn(ctx, prompt, model, onEvent)
+	return e.implementer.RunTurn(ctx, prompt, model, onEvent)
 }
 
 func (e *FixEngine) Publish(ctx context.Context, _ string) error {
@@ -154,11 +223,15 @@ func (e *FixEngine) PublishConflict(ctx context.Context, _ string) error {
 func (e *FixEngine) Close() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.session == nil {
-		return nil
+	var err error
+	if e.implementer != nil {
+		err = errors.Join(err, e.implementer.Close())
+		e.implementer = nil
 	}
-	err := e.session.Close()
-	e.session = nil
+	if e.verifier != nil {
+		err = errors.Join(err, e.verifier.Close())
+		e.verifier = nil
+	}
 	return err
 }
 
@@ -178,7 +251,7 @@ func (e *FixEngine) Worktree(ctx context.Context) (string, error) {
 }
 
 func (e *FixEngine) ensureStarted(ctx context.Context, model string, handler runner.ServerRequestHandler) error {
-	if e.session != nil {
+	if e.implementer != nil && e.verifier != nil {
 		return nil
 	}
 	worktree, err := e.ensureWorktree(ctx)
@@ -188,16 +261,21 @@ func (e *FixEngine) ensureStarted(ctx context.Context, model string, handler run
 	if strings.TrimSpace(e.cfg.Model) != "" {
 		model = e.cfg.Model
 	}
-	session, err := startFixSession(ctx, runner.SessionConfig{Provider: e.cfg.Provider, Binary: e.cfg.Binary, Model: model, WorkingDir: worktree, LogOut: e.cfg.LogOut, LogErr: e.cfg.LogErr, HandleRequest: handler})
+	implementer, err := startFixSession(ctx, runner.SessionConfig{Provider: e.cfg.Provider, Binary: e.cfg.Binary, Model: model, WorkingDir: worktree, LogOut: e.cfg.LogOut, LogErr: e.cfg.LogErr, HandleRequest: handler})
 	if err != nil {
 		return fmt.Errorf("start review fix AI: %w", err)
 	}
-	e.worktree, e.session = worktree, session
+	verifier, err := startFixSession(ctx, runner.SessionConfig{Provider: e.cfg.VerifierProvider, Binary: e.cfg.VerifierBinary, Model: e.cfg.VerifierModel, WorkingDir: worktree, LogOut: e.cfg.LogOut, LogErr: e.cfg.LogErr, HandleRequest: handler, Sandbox: "read-only"})
+	if err != nil {
+		_ = implementer.Close()
+		return fmt.Errorf("start review fix verifier AI: %w", err)
+	}
+	e.worktree, e.implementer, e.verifier = worktree, implementer, verifier
 	return nil
 }
 
 func (e *FixEngine) ensureConflictStarted(ctx context.Context, model string, handler runner.ServerRequestHandler) error {
-	if e.session != nil && e.conflictPrepared {
+	if e.implementer != nil && e.conflictPrepared {
 		return nil
 	}
 	worktree, err := e.ensureWorktree(ctx)
@@ -211,17 +289,17 @@ func (e *FixEngine) ensureConflictStarted(ctx context.Context, model string, han
 		}
 		e.conflictPrepared = true
 	}
-	if e.session != nil {
+	if e.implementer != nil {
 		return nil
 	}
 	if strings.TrimSpace(e.cfg.Model) != "" {
 		model = e.cfg.Model
 	}
-	session, err := startFixSession(ctx, runner.SessionConfig{Provider: e.cfg.Provider, Binary: e.cfg.Binary, Model: model, WorkingDir: worktree, LogOut: e.cfg.LogOut, LogErr: e.cfg.LogErr, HandleRequest: handler})
+	implementer, err := startFixSession(ctx, runner.SessionConfig{Provider: e.cfg.Provider, Binary: e.cfg.Binary, Model: model, WorkingDir: worktree, LogOut: e.cfg.LogOut, LogErr: e.cfg.LogErr, HandleRequest: handler})
 	if err != nil {
 		return fmt.Errorf("start conflict resolution AI: %w", err)
 	}
-	e.session = session
+	e.implementer = implementer
 	return nil
 }
 
@@ -250,6 +328,73 @@ func (e *FixEngine) conflictFiles(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("list conflict files: %w", err)
 	}
 	return strings.TrimSpace(files), nil
+}
+
+func (e *FixEngine) fixImplementationPrompt(workflowPrompt, feedback string, attempt int) string {
+	parts := []string{
+		workflowPrompt,
+		"", fmt.Sprintf("実装・検証ループ: %d/%d", attempt, e.cfg.LoopCount),
+		"作業ディレクトリ: " + e.worktree,
+		"PR headブランチ: " + e.cfg.HeadRefName,
+	}
+	if feedback != "" {
+		parts = append(parts, "", "検証者からの修正指示:", feedback)
+	}
+	parts = append(parts, "", "ユーザーの修正方針に従って実装と必要なテストを行い、review-comment-fixスキルの出力形式で結果をまとめてください。")
+	return strings.Join(parts, "\n")
+}
+
+func (e *FixEngine) fixVerificationPrompt(workflowPrompt, implementation string, attempt int) string {
+	return strings.Join([]string{
+		"PRレビュー指摘に対する修正を独立して検証してください。",
+		fmt.Sprintf("検証回数: %d/%d", attempt, e.cfg.LoopCount),
+		"作業ディレクトリ: " + e.worktree,
+		"PR headブランチ: " + e.cfg.HeadRefName,
+		"", "レビュー指摘とユーザーの修正方針:", strings.TrimSpace(workflowPrompt),
+		"", "実装者の結果:", strings.TrimSpace(implementation),
+		"", "ファイルを変更せず、指示対象の修正、差分、必要なテストを確認してください。",
+		`最終回答はJSONオブジェクトのみとし、{"status":"passed|changes_requested","feedback":"実装者への具体的な修正指示","summary":"日本語の検証概要"}の形式にしてください。`,
+		"問題がなければpassed、問題があればchanges_requestedを指定してください。",
+	}, "\n")
+}
+
+func (e *FixEngine) saveFixAttempt(attempt int, verification bool, result string) error {
+	name := fmt.Sprintf("%d回目_実装.md", attempt)
+	title := fmt.Sprintf("PR #%d レビュー指摘修正 実装%d回目", e.cfg.Number, attempt)
+	if verification {
+		name = fmt.Sprintf("%d回目_検証.md", attempt)
+		title = fmt.Sprintf("PR #%d レビュー指摘修正 検証%d回目", e.cfg.Number, attempt)
+	}
+	path := filepath.Join(e.cfg.RepositoryDir, e.cfg.WorkspaceName, "review_fix", strconv.Itoa(e.cfg.Number), name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create review fix attempt directory: %w", err)
+	}
+	content := fmt.Sprintf("# %s\n\n%s", title, strings.TrimSpace(result))
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write review fix attempt: %w", err)
+	}
+	return nil
+}
+
+func parseFixVerification(raw string) (fixVerification, error) {
+	cleaned := strings.TrimSpace(raw)
+	if strings.HasPrefix(cleaned, "```") {
+		lines := strings.Split(cleaned, "\n")
+		if len(lines) >= 3 {
+			cleaned = strings.Join(lines[1:len(lines)-1], "\n")
+		}
+	}
+	if start, end := strings.Index(cleaned, "{"), strings.LastIndex(cleaned, "}"); start >= 0 && end >= start {
+		cleaned = cleaned[start : end+1]
+	}
+	var result fixVerification
+	if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
+		return fixVerification{}, fmt.Errorf("decode verifier response: %w", err)
+	}
+	if result.Status != "passed" && result.Status != "changes_requested" {
+		return fixVerification{}, fmt.Errorf("unsupported verifier status %q", result.Status)
+	}
+	return result, nil
 }
 
 func mergeInProgress(ctx context.Context, dir string) bool {

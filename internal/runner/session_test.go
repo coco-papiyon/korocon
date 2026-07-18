@@ -8,9 +8,17 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestAppServerArgsEnableWorkspaceNetworkAccess(t *testing.T) {
+	want := []string{"--config", "sandbox_workspace_write.network_access=true", "app-server", "--stdio"}
+	if got := appServerArgs(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+}
 
 func TestSessionKeepsOneProcessAndThreadForMultipleTurns(t *testing.T) {
 	oldCommand := appServerCommand

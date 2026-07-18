@@ -334,9 +334,20 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 				}
 			}
 			if selectedPR != nil {
+				if selectedPR.Phase == prworkflow.PhaseFix {
+					feedbackPath, feedback, err := selectedPR.SaveReviewFeedback(ctx)
+					if err != nil {
+						return fmt.Errorf("レビュー指摘内容の取得に失敗しました: %w", err)
+					}
+					if _, err := fmt.Fprintf(stderr, "\n---\n\n%s\n保存先: %s\n\nレビュー指摘内容を確認し、修正する指摘と修正不要な指摘を入力してください。\n", strings.TrimSpace(feedback), feedbackPath); err != nil {
+						return err
+					}
+				}
 				fixEngine = prworkflow.NewFixEngine(prworkflow.FixConfig{
 					Provider: implementer.Provider, Binary: implementer.Binary, Model: implementer.Model,
+					VerifierProvider: verifier.Provider, VerifierBinary: verifier.Binary, VerifierModel: verifier.Model,
 					RepositoryDir: *dir, ImplementationDirectory: configured.ImplementationDirectory,
+					WorkspaceName: configured.WorkspaceName, LoopCount: configured.ImplementationLoopCount,
 					Number: selectedPR.PR.Number, Title: selectedPR.PR.Title,
 					HeadRefName: selectedPR.PR.HeadRefName, BaseRefName: selectedPR.PR.BaseRefName,
 					LogOut: logFile, LogErr: logFile,

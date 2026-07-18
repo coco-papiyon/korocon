@@ -1,10 +1,13 @@
 package pullrequest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,6 +62,25 @@ type File struct {
 	Path string `json:"path"`
 }
 
+type InlineComment struct {
+	Author    User   `json:"user"`
+	Body      string `json:"body"`
+	Path      string `json:"path"`
+	Line      int    `json:"line"`
+	StartLine int    `json:"start_line"`
+}
+
+type apiComment struct {
+	Author User   `json:"user"`
+	Body   string `json:"body"`
+}
+
+type apiReview struct {
+	Author User   `json:"user"`
+	Body   string `json:"body"`
+	State  string `json:"state"`
+}
+
 type PullRequest struct {
 	Number           int       `json:"number"`
 	Title            string    `json:"title"`
@@ -103,6 +125,7 @@ type Workflow struct {
 	Phase           Phase
 	publishFix      func(context.Context, string) error
 	publishConflict func(context.Context, string) error
+	reviewFeedback  string
 }
 
 func List(ctx context.Context, workingDir string) ([]PullRequest, error) {
@@ -203,6 +226,9 @@ func (w *Workflow) FixPrompt(instruction string) string {
 	} else {
 		lines = append(lines, "", "PRコメントに登録されているレビュー結果とレビュー修正指示を確認してください。")
 	}
+	if strings.TrimSpace(w.reviewFeedback) != "" {
+		lines = append(lines, "", "取得済みのレビュー指摘・全コメント:", strings.TrimSpace(w.reviewFeedback))
+	}
 	return strings.Join(append(lines, "", "Pull Request情報:", w.Context()), "\n")
 }
 
@@ -262,6 +288,134 @@ func (w *Workflow) Finish(ctx context.Context, runErr error) error {
 func (w *Workflow) SetPhase(phase Phase) { w.Phase = phase }
 func (w *Workflow) CurrentPhase() Phase  { return w.Phase }
 func (w *Workflow) Number() int          { return w.PR.Number }
+
+func (w *Workflow) SaveReviewFeedback(ctx context.Context) (string, string, error) {
+	repository, err := w.repository(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	apiComments, err := fetchPaginated[apiComment](ctx, w.runner, w.dir, fmt.Sprintf("repos/%s/issues/%d/comments?per_page=100", repository, w.PR.Number))
+	if err != nil {
+		return "", "", fmt.Errorf("fetch PR comments: %w", err)
+	}
+	apiReviews, err := fetchPaginated[apiReview](ctx, w.runner, w.dir, fmt.Sprintf("repos/%s/pulls/%d/reviews?per_page=100", repository, w.PR.Number))
+	if err != nil {
+		return "", "", fmt.Errorf("fetch PR reviews: %w", err)
+	}
+	inlineComments, err := fetchPaginated[InlineComment](ctx, w.runner, w.dir, fmt.Sprintf("repos/%s/pulls/%d/comments?per_page=100", repository, w.PR.Number))
+	if err != nil {
+		return "", "", fmt.Errorf("fetch PR inline comments: %w", err)
+	}
+	w.PR.Comments = make([]Comment, 0, len(apiComments))
+	for _, comment := range apiComments {
+		w.PR.Comments = append(w.PR.Comments, Comment{Author: comment.Author, Body: comment.Body})
+	}
+	w.PR.Reviews = make([]Review, 0, len(apiReviews))
+	for _, review := range apiReviews {
+		w.PR.Reviews = append(w.PR.Reviews, Review{Author: review.Author, Body: review.Body, State: review.State})
+	}
+	content := w.reviewFeedbackContent(inlineComments)
+	w.reviewFeedback = content
+	workspace := strings.TrimSpace(w.workspaceName)
+	if workspace == "" {
+		workspace = ".workspace"
+	}
+	path := filepath.Join(w.dir, workspace, "review_fix", fmt.Sprintf("%d_%s_レビュー指摘.md", w.PR.Number, sanitizePart(w.PR.Title)))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", "", fmt.Errorf("create review feedback directory: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return "", "", fmt.Errorf("write review feedback: %w", err)
+	}
+	relative, relErr := filepath.Rel(w.dir, path)
+	if relErr != nil {
+		return path, content, nil
+	}
+	return filepath.ToSlash(relative), content, nil
+}
+
+func (w *Workflow) repository(ctx context.Context) (string, error) {
+	repository := repositoryFromPullRequestURL(w.PR.URL)
+	if repository == "" {
+		raw, err := w.runner.Run(ctx, w.dir, "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner")
+		if err != nil {
+			return "", fmt.Errorf("resolve PR repository: %w", err)
+		}
+		repository = strings.TrimSpace(string(raw))
+	}
+	if repository == "" {
+		return "", errors.New("PR repository is empty")
+	}
+	return repository, nil
+}
+
+func fetchPaginated[T any](ctx context.Context, runner commandRunner, dir, endpoint string) ([]T, error) {
+	raw, err := runner.Run(ctx, dir, "api", "--paginate", endpoint)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	var values []T
+	for {
+		var page []T
+		if err := decoder.Decode(&page); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, err
+		}
+		values = append(values, page...)
+	}
+	return values, nil
+}
+
+func repositoryFromPullRequestURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || !strings.EqualFold(parsed.Host, "github.com") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) < 4 || parts[0] == "" || parts[1] == "" || !strings.EqualFold(parts[2], "pull") {
+		return ""
+	}
+	return parts[0] + "/" + parts[1]
+}
+
+func (w *Workflow) reviewFeedbackContent(inlineComments []InlineComment) string {
+	lines := []string{fmt.Sprintf("# PR #%d %s レビュー指摘", w.PR.Number, strings.TrimSpace(w.PR.Title)), "", "## レビュー"}
+	if len(w.PR.Reviews) == 0 {
+		lines = append(lines, "なし")
+	} else {
+		for _, review := range w.PR.Reviews {
+			lines = append(lines, fmt.Sprintf("- %s [%s]: %s", review.Author.Login, review.State, strings.TrimSpace(review.Body)))
+		}
+	}
+	lines = append(lines, "", "## PRコメント")
+	if len(w.PR.Comments) == 0 {
+		lines = append(lines, "なし")
+	} else {
+		for _, comment := range w.PR.Comments {
+			lines = append(lines, fmt.Sprintf("- %s: %s", comment.Author.Login, strings.TrimSpace(comment.Body)))
+		}
+	}
+	lines = append(lines, "", "## 行単位レビューコメント")
+	if len(inlineComments) == 0 {
+		lines = append(lines, "なし")
+	} else {
+		for _, comment := range inlineComments {
+			line := comment.Line
+			if line == 0 {
+				line = comment.StartLine
+			}
+			location := strings.TrimSpace(comment.Path)
+			if line > 0 {
+				location += ":" + strconv.Itoa(line)
+			}
+			lines = append(lines, fmt.Sprintf("- %s [%s]: %s", comment.Author.Login, location, strings.TrimSpace(comment.Body)))
+		}
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
 
 func (w *Workflow) SaveResult(result string) (string, error) {
 	workspace := strings.TrimSpace(w.workspaceName)

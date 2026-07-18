@@ -120,6 +120,39 @@ func TestSaveFixResult(t *testing.T) {
 	}
 }
 
+func TestSaveReviewFeedbackIncludesAllCommentTypes(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{responses: map[string]string{
+		"api --paginate repos/acme/repo/issues/8/comments?per_page=100": `[{"user":{"login":"alice"},"body":"general comment"}]`,
+		"api --paginate repos/acme/repo/pulls/8/reviews?per_page=100":   `[{"user":{"login":"bob"},"state":"CHANGES_REQUESTED","body":"review body"}]`,
+		"api --paginate repos/acme/repo/pulls/8/comments?per_page=100":  `[{"user":{"login":"carol"},"body":"inline one","path":"main.go","line":12}][{"user":{"login":"dave"},"body":"inline two","path":"main_test.go","start_line":30}]`,
+	}}
+	workflow := &Workflow{
+		dir: dir, workspaceName: ".workspace", runner: runner, Phase: PhaseFix,
+		PR: PullRequest{
+			Number: 8, Title: "Review Fix", URL: "https://github.com/acme/repo/pull/8",
+		},
+	}
+	path, content, err := workflow.SaveReviewFeedback(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != ".workspace/review_fix/8_review-fix_レビュー指摘.md" {
+		t.Fatalf("path = %q", path)
+	}
+	for _, want := range []string{"alice: general comment", "bob [CHANGES_REQUESTED]: review body", "carol [main.go:12]: inline one", "dave [main_test.go:30]: inline two"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("content missing %q:\n%s", want, content)
+		}
+		if !strings.Contains(workflow.FixPrompt("指摘を修正"), want) {
+			t.Fatalf("fix prompt missing %q", want)
+		}
+	}
+	if raw, err := os.ReadFile(filepath.Join(dir, path)); err != nil || string(raw) != content {
+		t.Fatalf("saved content = %q, err=%v", raw, err)
+	}
+}
+
 func TestLoadConflictTakesPriorityAndUsesConflictLifecycle(t *testing.T) {
 	runner := &fakeRunner{responses: map[string]string{
 		"pr view 12 --json number": `{"number":12,"title":"Conflict","state":"OPEN","mergeable":"CONFLICTING","headRefName":"feature/12","baseRefName":"main","labels":[{"name":"state:pr_review_comment"}]}`,

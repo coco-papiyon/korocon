@@ -49,13 +49,13 @@ tools/
 | --- | --- | --- |
 | `branchNamePattern` | `issue_#<issue番号>` | 実装worktreeのブランチ名。`<issue番号>`または`<issueNumber>`を置換します。 |
 | `implementationDirectory` | `../<リポジトリ名>-branches/` | 実装worktreeを置く親ディレクトリ。相対パスは対象リポジトリ基準で、`<リポジトリ名>`または`<repositoryName>`を置換します。 |
-| `implementationLoopCount` | `3` | 実装と検証の最大試行回数。最大10回です。 |
+| `implementationLoopCount` | `3` | Issue実装およびPRレビュー指摘修正の実装・検証の最大試行回数。最大10回です。 |
 | `baseBranch` | `main` | 実装承認時に作成するPRのbaseブランチです。 |
 | `startupCommand` | 未設定 | レビュー承認後にPR headのworktreeで自動起動する動作確認コマンドです。標準出力と標準エラーはログファイルへ記録します。 |
 | `builtinAllowedCommands` | korobokcleと同じ既定リスト | Codexのコマンド実行要求を自動承認するコマンドです。省略または空配列では既定リストを使用します。 |
 | `implementerProvider` | `codex` | 設計、実装、レビュー指摘修正を担当するProviderです。 |
 | `implementerModel` | `gpt-5.6-luna` | 実装者のModelです。 |
-| `verifierProvider` | 実装者と同じ | 実装検証を担当するProviderです。 |
+| `verifierProvider` | 実装者と同じ | Issue実装とPRレビュー指摘修正の検証を担当するProviderです。 |
 | `verifierModel` | 実装者と同じ | 検証者のModelです。 |
 | `reviewerProvider` | 実装者と同じ | PRレビューを担当するProviderです。 |
 | `reviewerModel` | 実装者と同じ | レビューアのModelです。 |
@@ -77,7 +77,7 @@ cat prompt.md | go run ./cmd/korocon
 
 ## 対話型CLIとしての実行
 
-`korocon`は起動時に`codex app-server --stdio`を1回だけ起動してから標準入力を待機します。各入力を同じCodex threadへ順番に送り、AIの最終結果を画面に表示します。通常時の空行は送信しませんが、Issueの承認待ちでは空行を承認として扱います。CodexのJSONイベントと標準エラーはログファイルへリアルタイム追記します。
+`korocon`は起動時に`codex --config sandbox_workspace_write.network_access=true app-server --stdio`を1回だけ起動してから標準入力を待機します。`workspace-write` sandboxと承認制御を維持しながら、CodexがGitHub APIなどへ接続できるようネットワークアクセスを許可します。各入力を同じCodex threadへ順番に送り、AIの最終結果を画面に表示します。通常時の空行は送信しませんが、Issueの承認待ちでは空行を承認として扱います。CodexのJSONイベントと標準エラーはログファイルへリアルタイム追記します。
 
 通常指示、設計、実装、再設計、再実装を含むすべてのAIジョブは、開始前に対象リポジトリで次を実行します。
 
@@ -160,9 +160,11 @@ PRレビューはリポジトリの`review-pull-request`スキルに従い、結
 
 `state:review_approved`（レビュー指摘承認済み）のPRを指定した場合は、承認済みであることを表示して入力を待ちます。未入力状態でEnterを押すとIssue/PR選択へ戻り、文字を入力してEnterを押すと、その入力を補足としてレビューアによる再レビューを実行します。
 
-AIが指摘を出した場合、または利用者がレビュー修正指示を入力した場合は、PRコメントへ投稿して`state:pr_review_comment`へ更新します。この時点では修正を開始せず、レビューアを停止して最初のIssue/PR選択へ戻ります。同じPRを再選択すると実装者を起動し、`../<リポジトリ名>-branches/<リポジトリ名>-pr-<PR番号>`へPR headのworktreeを作り、`review-comment-fix`スキルに従って設計検討、実装、テストを行います。結果は`<workspaceName>/review_fix_implementation/<PR番号>_<正規化タイトル>.md`へ保存します。承認すると変更をcommitしてPR headへpushし、`state:review_fixed`へ更新して実装者を停止し、最初の選択へ戻ります。再レビューは次に同じPRを選択したとき、レビューアの新しいセッションで実行します。
+AIが指摘を出した場合、または利用者がレビュー修正指示を入力した場合は、PRコメントへ投稿して`state:pr_review_comment`へ更新します。この時点では修正を開始せず、レビューアを停止して最初のIssue/PR選択へ戻ります。同じPRを再選択すると、PRの一般コメント、レビュー本文、行単位レビューコメントをページング取得し、`<workspaceName>/review_fix/<PR番号>_<正規化タイトル>_レビュー指摘.md`へ保存して画面に表示します。利用者は「指摘Aを修正、指摘Bは修正不要」のように修正方針を入力します。
 
-Issueの設計・実装、PRレビュー指摘修正、PRコンフリクト解消は実装者を使用します。Issue実装の検証は検証者、PRレビューと動作確認はレビューアを使用します。担当が変わる工程は同じAIプロセスで連続実行しません。
+修正方針の入力後、実装者と検証者を起動し、`../<リポジトリ名>-branches/<リポジトリ名>-pr-<PR番号>`のPR head worktreeで実装と独立検証を`implementationLoopCount`回まで繰り返します。既定値は3回です。各結果は`<workspaceName>/review_fix/<PR番号>/<回数>回目_実装.md`と`<回数>回目_検証.md`へ保存します。検証合格後の最終結果は`<workspaceName>/review_fix_implementation/<PR番号>_<正規化タイトル>.md`へ保存して承認を待ちます。承認すると変更をcommitしてPR headへpushし、`state:review_fixed`へ更新して両セッションを停止し、最初の選択へ戻ります。再レビューは次に同じPRを選択したとき、レビューアの新しいセッションで実行します。
+
+Issueの設計・実装、PRレビュー指摘修正、PRコンフリクト解消は実装者を使用します。Issue実装とPRレビュー指摘修正の検証は検証者、PRレビューと動作確認はレビューアを使用します。担当が変わる工程は同じAIプロセスで連続実行しません。
 
 レビュー承認後、`startupCommand`が設定されていればコマンドを自動起動し、`state:review_approved`として動作確認を待ちます。動作確認を完了してPRをクローズまたはマージした後、未入力Enterまたは`/check`を入力します。PRがCLOSEDまたはMERGEDならコマンドを停止して`state:completed`へ更新し、最初の`issue`/`pr`選択へ戻ります。OPENの場合は動作確認待ちを継続します。`startupCommand`が未設定の場合はレビュー承認時点でPR処理を終了し、最初の選択へ戻ります。
 
@@ -287,4 +289,4 @@ go build -o ./korocon ./cmd/korocon
 
 実装者のデフォルトProviderは`codex`、Modelは`gpt-5.6-luna`です。検証者とレビューアは、個別指定がなければ実装者と同じProvider・Modelを使用します。既存の`--provider`と`--model`は実装者設定を変更します。CLIの実行ファイル名は`--binary`で変更できます。コマンドはシェルを経由せず、引数を分離したまま起動します。
 
-Codexは`app-server --stdio`で起動し、threadには`workspace-write` sandboxと`on-request`承認ポリシーを設定します。危険な全自動実行フラグは使用しません。Copilotは役割別Providerへ`copilot`を指定します。
+Codexは`--config sandbox_workspace_write.network_access=true app-server --stdio`で起動し、threadには`workspace-write` sandboxと`on-request`承認ポリシーを設定します。ネットワークだけを明示的に許可し、危険な全自動実行フラグは使用しません。Copilotは役割別Providerへ`copilot`を指定します。
