@@ -39,7 +39,7 @@ tools/
   "reviewerProvider": "copilot",
   "reviewerModel": "claude-sonnet-4.5",
   "startupCommand": "go run ./cmd/app",
-  "builtinAllowedCommands": ["go test", "git diff", "git status"]
+  "builtinAllowedCommands": ["git add", "git diff", "git status", "go test"]
 }
 ```
 
