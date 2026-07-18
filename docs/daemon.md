@@ -20,9 +20,17 @@ go build -o ./korocon ./cmd/korocon
   "implementationDirectory": "../<リポジトリ名>-branches/",
   "implementationLoopCount": 3,
   "baseBranch": "main",
+  "implementerProvider": "codex",
+  "implementerModel": "gpt-5.6-luna",
+  "verifierProvider": "codex",
+  "verifierModel": "gpt-5.4-mini",
+  "reviewerProvider": "copilot",
+  "reviewerModel": "claude-sonnet-4.5",
   "builtinAllowedCommands": ["go test", "git diff", "git status"]
 }
 ```
+
+検証者・レビューアのProviderまたはModelを省略すると、実装者の値を使用します。同名のCLI引数は設定ファイルより優先されます。
 
 `doctor`が成功しない場合は、OpenAI Codex CLIをインストールしてログインしてください。
 
@@ -52,15 +60,17 @@ go build -o ./korocon ./cmd/korocon
 
 `state:design_ready`または`state:implementation_ready`のIssueでは、保存済みの設計・実装成果物を表示して承認待ちを再開します。この場合は初期ジョブを投入せず、通常どおり承認または修正入力を受け付けます。
 
+起動時にPRを選択した場合は、状態付きPR一覧から番号を入力し、選択PRのレビューを初期ジョブとして投入します。レビュー承認は動作確認へ進み、`/rerun`は再レビュー、その他の入力はPR head worktreeでのレビュー指摘修正へ進みます。修正承認後はPR headへpushして再レビューします。動作確認後にPRがCLOSEDまたはMERGEDであることを確認すると完了し、最初の選択へ戻ります。
+
 Issueジョブの結果を表示すると、区切り線を挟んで承認または修正指示の案内と`> `を表示します。未入力状態でEnter、`承認`、`approve`、`a`などは承認です。それ以外の入力はAIへのフィードバックとなり、同じ工程を再実行します。実装完了時も同じ入力フローです。
 
 結果は案内表示の前に、対象リポジトリの`<workspaceName>/design/`または`<workspaceName>/implementation/`へ保存します。ファイル名は`<issue番号>_<正規化タイトル>.md`です。
 
-実装・検証ループの各応答は、`<issue番号>_<正規化タイトル>_<回数>.md`と`<issue番号>_<正規化タイトル>_検証_<回数>.md`へそれぞれ保存します。
+実装・検証ループの各応答は、`implementation/<issue番号>/<回数>回目_実装.md`と`implementation/<issue番号>/<回数>回目_検討.md`へそれぞれ保存します。
 
-設計承認後は`<implementationDirectory>/<リポジトリ名>-<Issue番号>`へworktreeを作成します。既定の親ディレクトリは`../<リポジトリ名>-branches/`です。そのworktreeで実装用と検証用の2つのCodexを起動し、実装、読み取り専用検証、指摘反映を`implementationLoopCount`回まで繰り返して、検証合格後に実装承認を待ちます。
+設計承認後は`<implementationDirectory>/<リポジトリ名>-<Issue番号>`へworktreeを作成します。既定の親ディレクトリは`../<リポジトリ名>-branches/`です。そのworktreeで役割設定に従った実装用と検証用の2つのAIセッションを起動し、実装、読み取り専用検証、指摘反映を`implementationLoopCount`回まで繰り返して、検証合格後に実装承認を待ちます。
 
-実装承認時はworktreeの変更をcommitし、ブランチをpushして`baseBranch`向けのPRを作成します。成功するとPR URLを表示してIssueを`state:pr_created`へ更新します。失敗時は承認待ちとCodexセッションを維持します。
+実装承認時はworktreeの変更をcommitし、ブランチをpushして`baseBranch`向けのPRを作成します。成功するとPR URLを表示してIssueを`state:pr_created`へ更新し、実装用・検証用Codexを停止して最初の`issue`/`pr`選択へ戻ります。失敗時は承認待ちとCodexセッションを維持します。
 
 標準入力へプロンプトを1行ずつ書き込みます。入力中もCLIは操作できますが、Codexのターンは入力順に実行されます。
 

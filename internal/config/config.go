@@ -20,7 +20,14 @@ type Config struct {
 	ImplementationDirectory string   `json:"implementationDirectory"`
 	ImplementationLoopCount int      `json:"implementationLoopCount"`
 	BaseBranch              string   `json:"baseBranch"`
+	StartupCommand          string   `json:"startupCommand,omitempty"`
 	BuiltinAllowedCommands  []string `json:"builtinAllowedCommands"`
+	ImplementerProvider     string   `json:"implementerProvider"`
+	ImplementerModel        string   `json:"implementerModel"`
+	VerifierProvider        string   `json:"verifierProvider,omitempty"`
+	VerifierModel           string   `json:"verifierModel,omitempty"`
+	ReviewerProvider        string   `json:"reviewerProvider,omitempty"`
+	ReviewerModel           string   `json:"reviewerModel,omitempty"`
 }
 
 var defaultAllowedCommands = []string{
@@ -36,6 +43,7 @@ func Default() Config {
 		WorkspaceName: ".workspace", BranchNamePattern: "issue_#<issue番号>",
 		ImplementationDirectory: defaultImplementationDirectory, ImplementationLoopCount: 3, BaseBranch: "main",
 		BuiltinAllowedCommands: DefaultAllowedCommands(),
+		ImplementerProvider:    "codex", ImplementerModel: "gpt-5.6-luna",
 	}
 }
 
@@ -118,11 +126,43 @@ func loadFile(path string) (Config, error) {
 	if configured.BaseBranch == "" {
 		configured.BaseBranch = "main"
 	}
+	configured.StartupCommand = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(configured.StartupCommand, "\r\n", "\n"), "\r", "\n"))
 	configured.BuiltinAllowedCommands = normalizeStringList(configured.BuiltinAllowedCommands)
 	if len(configured.BuiltinAllowedCommands) == 0 {
 		configured.BuiltinAllowedCommands = DefaultAllowedCommands()
 	}
+	configured.ImplementerProvider, err = normalizeProvider(configured.ImplementerProvider, "codex")
+	if err != nil {
+		return Config{}, fmt.Errorf("config implementerProvider: %w", err)
+	}
+	configured.ImplementerModel = strings.TrimSpace(configured.ImplementerModel)
+	if configured.ImplementerModel == "" {
+		configured.ImplementerModel = "gpt-5.6-luna"
+	}
+	configured.VerifierProvider, err = normalizeProvider(configured.VerifierProvider, "")
+	if err != nil {
+		return Config{}, fmt.Errorf("config verifierProvider: %w", err)
+	}
+	configured.VerifierModel = strings.TrimSpace(configured.VerifierModel)
+	configured.ReviewerProvider, err = normalizeProvider(configured.ReviewerProvider, "")
+	if err != nil {
+		return Config{}, fmt.Errorf("config reviewerProvider: %w", err)
+	}
+	configured.ReviewerModel = strings.TrimSpace(configured.ReviewerModel)
 	return configured, nil
+}
+
+func normalizeProvider(value, fallback string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return fallback, nil
+	case "codex":
+		return "codex", nil
+	case "copilot", "github_copilot", "github-copilot":
+		return "copilot", nil
+	default:
+		return "", fmt.Errorf("unsupported provider %q", value)
+	}
 }
 
 func normalizeStringList(values []string) []string {

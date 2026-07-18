@@ -41,10 +41,7 @@ func BuildArgs(req Request) ([]string, error) {
 	if req.Prompt == "" {
 		return nil, errors.New("prompt is empty")
 	}
-	provider := req.Provider
-	if provider == "" {
-		provider = "codex"
-	}
+	provider := normalizeProvider(req.Provider)
 	switch provider {
 	case "codex":
 		args := []string{"exec", "--json", "--sandbox", "workspace-write"}

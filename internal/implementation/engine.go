@@ -17,7 +17,11 @@ import (
 )
 
 type Config struct {
+	Provider                string
 	Binary                  string
+	VerifierProvider        string
+	VerifierBinary          string
+	VerifierModel           string
 	RepositoryDir           string
 	WorkspaceName           string
 	ImplementationDirectory string
@@ -31,13 +35,8 @@ type Config struct {
 	LogErr                  io.Writer
 }
 
-type codexSession interface {
-	RunTurn(context.Context, string, string, func()) (runner.TurnResult, error)
-	Close() error
-}
-
-var startCodexSession = func(ctx context.Context, cfg runner.SessionConfig) (codexSession, error) {
-	return runner.StartSession(ctx, cfg)
+var startImplementationSession = func(ctx context.Context, cfg runner.SessionConfig) (runner.AgentSession, error) {
+	return runner.StartAgentSession(ctx, cfg)
 }
 
 var runGHCommand = func(ctx context.Context, dir string, args ...string) ([]byte, error) {
@@ -53,8 +52,8 @@ var runGHCommand = func(ctx context.Context, dir string, args ...string) ([]byte
 type Engine struct {
 	cfg         Config
 	mu          sync.Mutex
-	implementer codexSession
-	verifier    codexSession
+	implementer runner.AgentSession
+	verifier    runner.AgentSession
 	worktree    string
 	branch      string
 }
@@ -117,7 +116,7 @@ func (e *Engine) Run(ctx context.Context, workflowPrompt, model string, handleRe
 		if setPhase != nil {
 			setPhase(fmt.Sprintf("検証%d回目", attempt))
 		}
-		checked, err := e.verifier.RunTurn(ctx, e.verificationPrompt(string(design), implemented.Text, attempt), model, onEvent)
+		checked, err := e.verifier.RunTurn(ctx, e.verificationPrompt(string(design), implemented.Text, attempt), e.verifierModel(model), onEvent)
 		if err != nil {
 			return runner.TurnResult{}, fmt.Errorf("verification attempt %d: %w", attempt, err)
 		}
@@ -292,24 +291,54 @@ func (e *Engine) ensureStarted(ctx context.Context, model string, handleRequest 
 		return err
 	}
 	common := runner.SessionConfig{
-		Binary: e.cfg.Binary, Model: model, WorkingDir: worktree,
+		Provider: e.cfg.Provider, Binary: e.cfg.Binary, Model: model, WorkingDir: worktree,
 		LogOut: e.cfg.LogOut, LogErr: e.cfg.LogErr, HandleRequest: handleRequest,
 		ApprovalPolicy: "on-request",
 	}
 	common.Sandbox = "workspace-write"
-	implementer, err := startCodexSession(ctx, common)
+	implementer, err := startImplementationSession(ctx, common)
 	if err != nil {
-		return fmt.Errorf("start implementation Codex: %w", err)
+		return fmt.Errorf("start implementation AI: %w", err)
 	}
+	common.Provider = e.verifierProvider()
+	common.Binary = e.cfg.VerifierBinary
+	if common.Binary == "" && common.Provider == e.implementerProvider() {
+		common.Binary = e.cfg.Binary
+	}
+	common.Model = e.verifierModel(model)
 	common.Sandbox = "read-only"
-	verifier, err := startCodexSession(ctx, common)
+	verifier, err := startImplementationSession(ctx, common)
 	if err != nil {
 		_ = implementer.Close()
-		return fmt.Errorf("start verification Codex: %w", err)
+		return fmt.Errorf("start verification AI: %w", err)
 	}
 	e.implementer, e.verifier = implementer, verifier
 	e.worktree, e.branch = worktree, branch
 	return nil
+}
+
+func (e *Engine) implementerProvider() string {
+	provider := strings.TrimSpace(e.cfg.Provider)
+	if provider == "" {
+		return "codex"
+	}
+	return provider
+}
+
+func (e *Engine) verifierProvider() string {
+	provider := strings.TrimSpace(e.cfg.VerifierProvider)
+	if provider == "" {
+		return e.implementerProvider()
+	}
+	return provider
+}
+
+func (e *Engine) verifierModel(implementerModel string) string {
+	model := strings.TrimSpace(e.cfg.VerifierModel)
+	if model == "" {
+		return implementerModel
+	}
+	return model
 }
 
 func (e *Engine) ensureWorktree(ctx context.Context) (string, string, error) {
@@ -360,11 +389,11 @@ func (e *Engine) implementationArtifactPath() string {
 }
 
 func (e *Engine) attemptArtifactPath(attempt int, verification bool) string {
-	name := fmt.Sprintf("%d_%s_%d.md", e.cfg.IssueNumber, sanitizePart(e.cfg.IssueTitle), attempt)
+	name := fmt.Sprintf("%d回目_実装.md", attempt)
 	if verification {
-		name = fmt.Sprintf("%d_%s_検証_%d.md", e.cfg.IssueNumber, sanitizePart(e.cfg.IssueTitle), attempt)
+		name = fmt.Sprintf("%d回目_検討.md", attempt)
 	}
-	return filepath.Join(e.cfg.RepositoryDir, e.cfg.WorkspaceName, "implementation", name)
+	return filepath.Join(e.cfg.RepositoryDir, e.cfg.WorkspaceName, "implementation", strconv.Itoa(e.cfg.IssueNumber), name)
 }
 
 func (e *Engine) saveAttemptResult(attempt int, verification bool, result string) error {
@@ -372,9 +401,9 @@ func (e *Engine) saveAttemptResult(attempt int, verification bool, result string
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create attempt artifact directory: %w", err)
 	}
-	title := e.cfg.IssueTitle
+	title := fmt.Sprintf("%s 実装 %d回目", e.cfg.IssueTitle, attempt)
 	if verification {
-		title = fmt.Sprintf("%s 検証 %d回目", e.cfg.IssueTitle, attempt)
+		title = fmt.Sprintf("%s 検討 %d回目", e.cfg.IssueTitle, attempt)
 	}
 	content := fmt.Sprintf("# %s\n\n%s", strings.TrimSpace(title), strings.TrimSpace(result))
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {

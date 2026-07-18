@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -9,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/coco-papiyon/korocon/internal/runner"
 )
 
 func TestJSONResultWriterDisplaysFinalAgentMessage(t *testing.T) {
@@ -144,6 +147,50 @@ func TestRunAllowsInputHandlerToConsumeEmptyLineAndStartPrompt(t *testing.T) {
 	}
 }
 
+func TestRunReturnsRestartWhenInputHandlerRequestsSelectionRestart(t *testing.T) {
+	err := Run(context.Background(), strings.NewReader("restart\n"), &strings.Builder{}, Config{
+		Provider: "copilot", Binary: "/bin/echo",
+		HandleInput: func(context.Context, string) (InputAction, error) {
+			return InputAction{Handled: true, Restart: true}, nil
+		},
+	})
+	if !errors.Is(err, ErrRestart) {
+		t.Fatalf("Run() error = %v, want ErrRestart", err)
+	}
+}
+
+func TestRunReturnsRestartWhenFinishHookRequestsSelectionRestart(t *testing.T) {
+	err := Run(context.Background(), strings.NewReader(""), &strings.Builder{}, Config{
+		Provider: "copilot", Binary: "/bin/echo", InitialPrompt: "review PR",
+		OnJobFinish: func(context.Context, uint64, string, string, error) error {
+			return ErrRestart
+		},
+	})
+	if !errors.Is(err, ErrRestart) {
+		t.Fatalf("Run() error = %v, want ErrRestart", err)
+	}
+}
+
+func TestRunRestartLeavesFollowingBufferedInput(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("restart\nissue\n"))
+	err := Run(context.Background(), reader, &strings.Builder{}, Config{
+		Provider: "copilot", Binary: "/bin/echo",
+		HandleInput: func(context.Context, string) (InputAction, error) {
+			return InputAction{Handled: true, Restart: true}, nil
+		},
+	})
+	if !errors.Is(err, ErrRestart) {
+		t.Fatalf("Run() error = %v, want ErrRestart", err)
+	}
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line != "issue\n" {
+		t.Fatalf("remaining input = %q, want issue\\n", line)
+	}
+}
+
 func TestRunCallsFinishHookAfterDisplayingResult(t *testing.T) {
 	var display strings.Builder
 	err := Run(context.Background(), strings.NewReader("prompt\n"), &display, Config{
@@ -176,6 +223,87 @@ func TestRunDisplaysProviderAndModelWhenJobStarts(t *testing.T) {
 	}
 	if !strings.Contains(status.String(), "provider: copilot") || !strings.Contains(status.String(), "model: gpt-test") {
 		t.Fatalf("status does not include provider and model: %q", status.String())
+	}
+}
+
+func TestRunExecutesCustomJobWhenPrimaryProviderIsCopilot(t *testing.T) {
+	var result strings.Builder
+	called := false
+	usedModel := ""
+	err := Run(context.Background(), strings.NewReader(""), &strings.Builder{}, Config{
+		Provider: "copilot", Binary: "/bin/echo", ResultOut: &result,
+		InitialJob: &JobSpec{Prompt: "fix review", Execute: func(_ context.Context, model string, _ runner.ServerRequestHandler, setPhase func(string), _ func()) (runner.TurnResult, error) {
+			called = true
+			usedModel = model
+			setPhase("レビュー指摘修正")
+			return runner.TurnResult{Text: "fixed"}, nil
+		}},
+		Model: "reviewer-model",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || usedModel != "reviewer-model" || !strings.Contains(result.String(), "fixed") {
+		t.Fatalf("called=%t model=%q result=%q", called, usedModel, result.String())
+	}
+}
+
+func TestRunKeepsPhaseHistoryWhenPhaseChanges(t *testing.T) {
+	var status strings.Builder
+	err := Run(context.Background(), strings.NewReader(""), &strings.Builder{}, Config{
+		Provider:  "copilot",
+		Binary:    "/bin/echo",
+		StatusOut: &status,
+		InitialJob: &JobSpec{Prompt: "implementation", Execute: func(_ context.Context, _ string, _ runner.ServerRequestHandler, setPhase func(string), showProgress func()) (runner.TurnResult, error) {
+			setPhase("実装1回目")
+			showProgress()
+			setPhase("実装1回目")
+			setPhase("検証1回目")
+			setPhase("実装2回目")
+			return runner.TurnResult{}, nil
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := status.String()
+	for _, want := range []string{
+		"[job 1] 完了(実装1回目)",
+		"[job 2] 実行中(検証1回目)",
+		"[job 2] 完了(検証1回目)",
+		"[job 3] 実行中(実装2回目)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("status does not contain %q: %q", want, got)
+		}
+	}
+	if strings.Count(got, "完了(実装1回目)") != 1 {
+		t.Fatalf("same-phase progress created duplicate history: %q", got)
+	}
+	if strings.Index(got, "[job 1] 完了(実装1回目)") > strings.Index(got, "[job 2] 完了(検証1回目)") {
+		t.Fatalf("phase history is out of order: %q", got)
+	}
+}
+
+func TestRunKeepsPhaseHistoryWhenPhaseFails(t *testing.T) {
+	var status strings.Builder
+	err := Run(context.Background(), strings.NewReader(""), &strings.Builder{}, Config{
+		Provider:  "copilot",
+		Binary:    "/bin/echo",
+		StatusOut: &status,
+		InitialJob: &JobSpec{Prompt: "implementation", Execute: func(_ context.Context, _ string, _ runner.ServerRequestHandler, setPhase func(string), _ func()) (runner.TurnResult, error) {
+			setPhase("実装1回目")
+			setPhase("検証1回目")
+			return runner.TurnResult{}, errors.New("verification failed")
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := status.String()
+	if !strings.Contains(got, "[job 1] 完了(実装1回目)") || !strings.Contains(got, "[job 2] 失敗") {
+		t.Fatalf("phase history was not preserved on failure: %q", got)
 	}
 }
 
