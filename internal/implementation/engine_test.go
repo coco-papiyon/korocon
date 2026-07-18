@@ -126,18 +126,19 @@ func TestEngineRepeatsImplementationUntilVerificationPasses(t *testing.T) {
 		{Text: `{"status":"changes_requested","feedback":"fix tests","summary":"failed"}`, Tokens: 5},
 		{Text: `{"status":"passed","feedback":"","summary":"確認済み"}`, Tokens: 7},
 	}}
-	oldStart := startCodexSession
+	oldStart := startImplementationSession
 	var configs []runner.SessionConfig
-	startCodexSession = func(_ context.Context, cfg runner.SessionConfig) (codexSession, error) {
+	startImplementationSession = func(_ context.Context, cfg runner.SessionConfig) (runner.AgentSession, error) {
 		configs = append(configs, cfg)
 		if len(configs) == 1 {
 			return implementer, nil
 		}
 		return verifier, nil
 	}
-	defer func() { startCodexSession = oldStart }()
+	defer func() { startImplementationSession = oldStart }()
 
 	engine := New(Config{
+		Provider: "copilot", VerifierProvider: "codex", VerifierModel: "gpt-verifier",
 		RepositoryDir: repository, WorkspaceName: ".workspace", ImplementationDirectory: "../",
 		BranchNamePattern: "issue_#<issue番号>", LoopCount: 3,
 		IssueNumber: 42, IssueTitle: "Add feature", IssueContext: "issue context",
@@ -159,17 +160,18 @@ func TestEngineRepeatsImplementationUntilVerificationPasses(t *testing.T) {
 	if strings.Join(phases, ",") != "実装1回目,検証1回目,実装2回目,検証2回目" {
 		t.Fatalf("phases = %v", phases)
 	}
-	if len(configs) != 2 || configs[0].Sandbox != "workspace-write" || configs[1].Sandbox != "read-only" {
+	if len(configs) != 2 || configs[0].Provider != "copilot" || configs[0].Model != "gpt-test" || configs[0].Sandbox != "workspace-write" ||
+		configs[1].Provider != "codex" || configs[1].Model != "gpt-verifier" || configs[1].Sandbox != "read-only" {
 		t.Fatalf("session configs = %+v", configs)
 	}
 	artifacts := map[string]string{
-		"42_add-feature_1.md":    "# Add feature\n\nfirst",
-		"42_add-feature_検証_1.md": "# Add feature 検証 1回目\n\n" + `{"status":"changes_requested","feedback":"fix tests","summary":"failed"}`,
-		"42_add-feature_2.md":    "# Add feature\n\nsecond",
-		"42_add-feature_検証_2.md": "# Add feature 検証 2回目\n\n" + `{"status":"passed","feedback":"","summary":"確認済み"}`,
+		"1回目_実装.md": "# Add feature 実装 1回目\n\nfirst",
+		"1回目_検討.md": "# Add feature 検討 1回目\n\n" + `{"status":"changes_requested","feedback":"fix tests","summary":"failed"}`,
+		"2回目_実装.md": "# Add feature 実装 2回目\n\nsecond",
+		"2回目_検討.md": "# Add feature 検討 2回目\n\n" + `{"status":"passed","feedback":"","summary":"確認済み"}`,
 	}
 	for name, want := range artifacts {
-		raw, err := os.ReadFile(filepath.Join(repository, ".workspace", "implementation", name))
+		raw, err := os.ReadFile(filepath.Join(repository, ".workspace", "implementation", "42", name))
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}

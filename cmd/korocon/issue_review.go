@@ -168,7 +168,7 @@ func (c *issueReviewController) HandleInput(ctx context.Context, input string) (
 		if c.closeImplementation != nil {
 			err = errors.Join(err, c.closeImplementation())
 		}
-		return daemon.InputAction{Handled: true}, err
+		return daemon.InputAction{Handled: true, Restart: true}, err
 	}
 
 	prompt := c.workflow.RevisionPrompt(input)

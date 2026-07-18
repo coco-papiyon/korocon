@@ -46,7 +46,10 @@ type InputAction struct {
 	Handled bool
 	Prompt  string
 	Job     *JobSpec
+	Restart bool
 }
+
+var ErrRestart = errors.New("restart interactive selection")
 
 type JobExecutor func(context.Context, string, runner.ServerRequestHandler, func(string), func()) (runner.TurnResult, error)
 
@@ -80,6 +83,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 	defer cancel()
 
 	var nextID atomic.Uint64
+	var restartRequested atomic.Bool
 	var wg sync.WaitGroup
 	var writeMu sync.Mutex
 	var logMu sync.Mutex
@@ -325,103 +329,107 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 
 	var residentJobs chan residentJob
 	var closeResidentJobs sync.Once
-	if codexSession != nil {
-		residentJobs = make(chan residentJob, 128)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for job := range residentJobs {
-				var progressMu sync.Mutex
-				dots := 1
-				displayID := job.id
-				phase := ""
-				phaseStarted := false
-				setPhase := func(next string) {
-					progressMu.Lock()
-					defer progressMu.Unlock()
-					if phaseStarted && strings.TrimSpace(next) != phase {
-						displayID = nextID.Add(1)
+	residentJobs = make(chan residentJob, 128)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for job := range residentJobs {
+			var progressMu sync.Mutex
+			dots := 1
+			displayID := job.id
+			phase := ""
+			phaseStarted := false
+			setPhase := func(next string) {
+				progressMu.Lock()
+				defer progressMu.Unlock()
+				nextPhase := strings.TrimSpace(next)
+				if phaseStarted && nextPhase != phase {
+					if phase == "" {
+						status("\r\033[2K[job %d] 完了\n", displayID)
+					} else {
+						status("\r\033[2K[job %d] 完了(%s)\n", displayID, phase)
 					}
-					phaseStarted = true
-					phase = strings.TrimSpace(next)
+					displayID = nextID.Add(1)
+				}
+				phaseStarted = true
+				phase = nextPhase
+				dots = 1
+				if phase == "" {
+					status("\r\033[2K[job %d] 実行中%s", displayID, strings.Repeat(".", dots))
+				} else {
+					status("\r\033[2K[job %d] 実行中(%s)%s", displayID, phase, strings.Repeat(".", dots))
+				}
+			}
+			showProgress := func() {
+				progressMu.Lock()
+				defer progressMu.Unlock()
+				dots++
+				if dots > maxProgressDots {
 					dots = 1
-					if phase == "" {
-						status("\r\033[2K[job %d] 実行中%s", displayID, strings.Repeat(".", dots))
-					} else {
-						status("\r\033[2K[job %d] 実行中(%s)%s", displayID, phase, strings.Repeat(".", dots))
-					}
 				}
-				showProgress := func() {
-					progressMu.Lock()
-					defer progressMu.Unlock()
-					dots++
-					if dots > maxProgressDots {
-						dots = 1
-					}
-					if phase == "" {
-						status("\r\033[2K[job %d] 実行中%s", displayID, strings.Repeat(".", dots))
-					} else {
-						status("\r\033[2K[job %d] 実行中(%s)%s", displayID, phase, strings.Repeat(".", dots))
-					}
-				}
-				var result runner.TurnResult
-				var err error
-				if job.execute != nil {
-					sessionMu.Lock()
-					if codexSession != nil {
-						_ = codexSession.Close()
-						codexSession = nil
-					}
-					sessionMu.Unlock()
-					result, err = job.execute(ctx, job.model, handleServerRequest, setPhase, showProgress)
+				if phase == "" {
+					status("\r\033[2K[job %d] 実行中%s", displayID, strings.Repeat(".", dots))
 				} else {
-					sessionMu.Lock()
-					if codexSession == nil {
-						codexSession, err = startPrimarySession(job.model)
-					}
-					session := codexSession
-					sessionMu.Unlock()
-					if err == nil {
-						result, err = session.RunTurn(ctx, job.prompt, "", showProgress)
-					}
+					status("\r\033[2K[job %d] 実行中(%s)%s", displayID, phase, strings.Repeat(".", dots))
 				}
-				if diff, diffErr := captureGitDiff(cfg.WorkingDir); diffErr == nil {
-					diffMu.Lock()
-					latestDiff = diff
-					hasLatestDiff = true
-					diffMu.Unlock()
+			}
+			var result runner.TurnResult
+			var err error
+			if job.execute != nil {
+				sessionMu.Lock()
+				if codexSession != nil {
+					_ = codexSession.Close()
+					codexSession = nil
 				}
-				if err != nil {
-					_ = writeResult(job.id, "", err)
-					status("\r\033[2K[job %d] 失敗\n", displayID)
-					if cfg.OnJobFinish != nil {
-						if finishErr := cfg.OnJobFinish(ctx, job.id, job.prompt, "", err); finishErr != nil {
-							_ = writeResult(job.id, "", finishErr)
-						}
-					}
-					promptMark()
-					continue
+				sessionMu.Unlock()
+				result, err = job.execute(ctx, job.model, handleServerRequest, setPhase, showProgress)
+			} else {
+				sessionMu.Lock()
+				if codexSession == nil {
+					codexSession, err = startPrimarySession(job.model)
 				}
-				if result.Tokens > 0 {
-					status("\r\033[2K[job %d] 完了（トークン数: %d）\n", displayID, result.Tokens)
-				} else {
-					status("\r\033[2K[job %d] 完了\n", displayID)
+				session := codexSession
+				sessionMu.Unlock()
+				if err == nil {
+					result, err = session.RunTurn(ctx, job.prompt, "", showProgress)
 				}
-				if result.Text != "" {
-					_, _ = io.WriteString(displayOut, result.Text)
-					if !strings.HasSuffix(result.Text, "\n") {
-						_, _ = io.WriteString(displayOut, "\n")
-					}
-				}
+			}
+			if diff, diffErr := captureGitDiff(cfg.WorkingDir); diffErr == nil {
+				diffMu.Lock()
+				latestDiff = diff
+				hasLatestDiff = true
+				diffMu.Unlock()
+			}
+			if err != nil {
+				_ = writeResult(job.id, "", err)
+				status("\r\033[2K[job %d] 失敗\n", displayID)
 				if cfg.OnJobFinish != nil {
-					if finishErr := cfg.OnJobFinish(ctx, job.id, job.prompt, result.Text, nil); finishErr != nil {
+					if finishErr := cfg.OnJobFinish(ctx, job.id, job.prompt, "", err); finishErr != nil {
 						_ = writeResult(job.id, "", finishErr)
 					}
 				}
 				promptMark()
+				continue
 			}
-		}()
-	}
+			if result.Tokens > 0 {
+				status("\r\033[2K[job %d] 完了（トークン数: %d）\n", displayID, result.Tokens)
+			} else {
+				status("\r\033[2K[job %d] 完了\n", displayID)
+			}
+			if result.Text != "" {
+				_, _ = io.WriteString(displayOut, result.Text)
+				if !strings.HasSuffix(result.Text, "\n") {
+					_, _ = io.WriteString(displayOut, "\n")
+				}
+			}
+			if cfg.OnJobFinish != nil {
+				if finishErr := cfg.OnJobFinish(ctx, job.id, job.prompt, result.Text, nil); finishErr != nil {
+					_ = writeResult(job.id, "", finishErr)
+				}
+			}
+			promptMark()
+		}
+	}()
 	stopResidentJobs := func() {
 		if residentJobs != nil {
 			closeResidentJobs.Do(func() { close(residentJobs) })
@@ -459,18 +467,8 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				return
 			}
 		}
-		if residentJobs != nil {
+		if spec.Execute != nil || provider == "codex" {
 			residentJobs <- residentJob{id: id, prompt: prompt, model: jobModel, execute: spec.Execute}
-			return
-		}
-		if spec.Execute != nil {
-			err := errors.New("implementation jobs require the codex provider")
-			_ = writeResult(id, "", err)
-			status("\r\033[2K[job %d] 失敗\n", id)
-			if cfg.OnJobFinish != nil {
-				_ = cfg.OnJobFinish(ctx, id, prompt, "", err)
-			}
-			promptMark()
 			return
 		}
 		var progressMu sync.Mutex
@@ -582,7 +580,14 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			action, err := cfg.HandleInput(ctx, line)
 			if err != nil {
 				_, _ = fmt.Fprintf(displayOut, "入力処理に失敗しました: %v\n", err)
-				promptMark()
+				if !action.Restart {
+					promptMark()
+					return
+				}
+			}
+			if action.Restart {
+				restartRequested.Store(true)
+				cancel()
 				return
 			}
 			if action.Handled {
@@ -620,41 +625,60 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		}
 		stopResidentJobs()
 		wg.Wait()
+		if restartRequested.Load() {
+			return ErrRestart
+		}
 		return err
 	}
 
-	lines := make(chan string)
-	readErr := make(chan error, 1)
-	go func() {
-		scanner := bufio.NewScanner(in)
-		// Prompts are commonly pasted as documents; allow lines larger than the
-		// Scanner default while still bounding memory use for a resident process.
-		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-		for scanner.Scan() {
-			lines <- scanner.Text()
-		}
-		readErr <- scanner.Err()
-	}()
+	reader, ok := in.(*bufio.Reader)
+	if !ok {
+		reader = bufio.NewReader(in)
+	}
 	promptMark()
 	for {
-		var line string
+		readResult := make(chan readLineResult, 1)
+		go func() {
+			line, err := reader.ReadString('\n')
+			if len(line) > 4*1024*1024 {
+				readResult <- readLineResult{err: errors.New("daemon input line exceeds 4 MiB")}
+				return
+			}
+			line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+			readResult <- readLineResult{line: line, err: err}
+		}()
 		select {
 		case <-ctx.Done():
 			stopResidentJobs()
 			wg.Wait()
-			return ctx.Err()
-		case err := <-readErr:
-			stopResidentJobs()
-			if err != nil {
-				wg.Wait()
-				return fmt.Errorf("read daemon input: %w", err)
+			if restartRequested.Load() {
+				return ErrRestart
 			}
-			wg.Wait()
-			return nil
-		case line = <-lines:
+			return ctx.Err()
+		case result := <-readResult:
+			if result.line != "" || result.err == nil {
+				processInput(result.line)
+			}
+			if restartRequested.Load() {
+				stopResidentJobs()
+				wg.Wait()
+				return ErrRestart
+			}
+			if result.err != nil {
+				stopResidentJobs()
+				wg.Wait()
+				if errors.Is(result.err, io.EOF) {
+					return nil
+				}
+				return fmt.Errorf("read daemon input: %w", result.err)
+			}
 		}
-		processInput(line)
 	}
+}
+
+type readLineResult struct {
+	line string
+	err  error
 }
 
 // selectModel resolves both forms accepted by the interactive command. Keep
