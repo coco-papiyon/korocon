@@ -143,8 +143,8 @@ func TestSelectPullRequestDisplaysStatusAndLoadsSelectedNumber(t *testing.T) {
 		return &prworkflow.Workflow{PR: prworkflow.PullRequest{Number: number, Title: "Conflict", State: "OPEN", Mergeable: "CONFLICTING", HeadRefName: "feature/6", BaseRefName: "main"}, Phase: prworkflow.PhaseConflict}, nil
 	}
 	var out strings.Builder
-	selected, err := selectPullRequest(context.Background(), bufio.NewReader(strings.NewReader("6\n")), &out, ".", ".workspace")
-	if err != nil {
+	selected, retry, err := selectPullRequest(context.Background(), bufio.NewReader(strings.NewReader("6\n")), &out, ".", ".workspace")
+	if err != nil || retry {
 		t.Fatal(err)
 	}
 	if loaded != 6 || selected.PR.Number != 6 || selected.Phase != prworkflow.PhaseConflict {
@@ -156,6 +156,46 @@ func TestSelectPullRequestDisplaysStatusAndLoadsSelectedNumber(t *testing.T) {
 		strings.Contains(tableOutput, "APPROVED") || !strings.Contains(tableOutput, "5     レビュー承認済み") ||
 		!strings.Contains(tableOutput, "6     コンフリクト") {
 		t.Fatalf("output = %q", tableOutput)
+	}
+}
+
+func TestSelectGitHubInformationReturnsToChoiceWhenNoPullRequests(t *testing.T) {
+	originalList, originalIssue := listPullRequests, loadIssue
+	t.Cleanup(func() { listPullRequests, loadIssue = originalList, originalIssue })
+	listPullRequests = func(context.Context, string) ([]prworkflow.PullRequest, error) {
+		return []prworkflow.PullRequest{{Number: 3, State: "MERGED"}}, nil
+	}
+	loadIssue = func(_ context.Context, _ string, number int, _ string) (*issueworkflow.Workflow, error) {
+		return &issueworkflow.Workflow{Issue: issueworkflow.Issue{Number: number, State: "OPEN"}, Phase: issueworkflow.PhaseDesign}, nil
+	}
+	var out strings.Builder
+	_, selected, pr, err := selectGitHubInformation(context.Background(), strings.NewReader("pr\nissue\n7\n"), &out, ".", ".workspace")
+	if err != nil || selected == nil || pr != nil || selected.Issue.Number != 7 {
+		t.Fatalf("selected=%+v pr=%+v err=%v output=%q", selected, pr, err, out.String())
+	}
+	if !strings.Contains(out.String(), "表示対象のPRがありません") || strings.Count(out.String(), "取得する情報を選択してください") != 2 {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestSelectPullRequestRetriesAfterInvalidNumber(t *testing.T) {
+	originalList, originalLoad := listPullRequests, loadPullRequest
+	t.Cleanup(func() { listPullRequests, loadPullRequest = originalList, originalLoad })
+	listPullRequests = func(context.Context, string) ([]prworkflow.PullRequest, error) {
+		return []prworkflow.PullRequest{{Number: 6, State: "OPEN", Title: "Review"}}, nil
+	}
+	loaded := 0
+	loadPullRequest = func(_ context.Context, _ string, number int, _ string) (*prworkflow.Workflow, error) {
+		loaded = number
+		return &prworkflow.Workflow{PR: prworkflow.PullRequest{Number: number, State: "OPEN", Title: "Review"}, Phase: prworkflow.PhaseReview}, nil
+	}
+	var out strings.Builder
+	selected, retry, err := selectPullRequest(context.Background(), bufio.NewReader(strings.NewReader("abc\n0\n6\n")), &out, ".", ".workspace")
+	if err != nil || retry || selected == nil || loaded != 6 {
+		t.Fatalf("selected=%+v retry=%v loaded=%d err=%v", selected, retry, loaded, err)
+	}
+	if strings.Count(out.String(), "PR番号が不正です") != 2 || !strings.Contains(out.String(), "再入力してください") {
+		t.Fatalf("unexpected output: %q", out.String())
 	}
 }
 

@@ -205,10 +205,9 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 					}
 				}
 				review = newIssueReviewController(selectedIssue, selectedIssue.Phase, stderr, implementationJob, implementationEngine.Close)
-				if selectedIssue.Phase == issueworkflow.PhaseImplementation {
-					initialJob = review.InitialJob()
-				} else {
-					initialPrompt = review.InitialPrompt()
+				initialPrompt, initialJob, err = initialIssueReviewState(selectedIssue, review)
+				if err != nil {
+					return err
 				}
 			}
 			if selectedPR != nil {
@@ -374,6 +373,23 @@ func selectRequestedGitHubInformation(ctx context.Context, out io.Writer, workin
 	return nil, nil, errors.New("IssueまたはPRが指定されていません")
 }
 
+func initialIssueReviewState(selected *issueworkflow.Workflow, review *issueReviewController) (string, *daemon.JobSpec, error) {
+	if selected.IsPending() {
+		result, path, err := selected.PendingResult()
+		if err != nil {
+			return "", nil, fmt.Errorf("issue #%dの承認待ち成果物を復元できません: %w", selected.Issue.Number, err)
+		}
+		if err := review.SetPendingResult(result, path); err != nil {
+			return "", nil, fmt.Errorf("issue #%dの承認待ち状態を表示できません: %w", selected.Issue.Number, err)
+		}
+		return "", nil, nil
+	}
+	if selected.Phase == issueworkflow.PhaseImplementation {
+		return "", review.InitialJob(), nil
+	}
+	return review.InitialPrompt(), nil, nil
+}
+
 // selectGitHubInformation performs the small piece of setup that is needed
 // before the resident AI process starts. Keeping this outside daemon.Run is
 // important: the choice and issue number must not be sent as AI prompts.
@@ -401,9 +417,12 @@ func selectGitHubInformation(ctx context.Context, in io.Reader, out io.Writer, w
 			}
 			return remainingInput(in, reader), selected, nil, nil
 		case "2", "pr", "p":
-			selected, err := selectPullRequest(ctx, reader, out, workingDir, workspaceName)
+			selected, retry, err := selectPullRequest(ctx, reader, out, workingDir, workspaceName)
 			if err != nil {
 				return nil, nil, nil, err
+			}
+			if retry {
+				continue
 			}
 			return remainingInput(in, reader), nil, selected, nil
 		default:
@@ -484,56 +503,65 @@ func readStringContext(ctx context.Context, reader *bufio.Reader) (string, error
 	}
 }
 
-func selectPullRequest(ctx context.Context, reader *bufio.Reader, out io.Writer, workingDir, workspaceName string) (*prworkflow.Workflow, error) {
+func selectPullRequest(ctx context.Context, reader *bufio.Reader, out io.Writer, workingDir, workspaceName string) (*prworkflow.Workflow, bool, error) {
 	prs, err := listPullRequests(ctx, workingDir)
 	if err != nil {
-		return nil, fmt.Errorf("PR一覧の取得に失敗しました: %w", err)
+		return nil, false, fmt.Errorf("PR一覧の取得に失敗しました: %w", err)
 	}
 	prs = slices.DeleteFunc(prs, func(pr prworkflow.PullRequest) bool {
 		return strings.EqualFold(strings.TrimSpace(pr.State), "MERGED") || pr.IsDraft
 	})
 	if len(prs) == 0 {
-		return nil, errors.New("表示対象のPRがありません（MERGEDまたはDraftを除く）")
+		if _, err := fmt.Fprintln(out, "表示対象のPRがありません（MERGEDまたはDraftを除く）。選択画面へ戻ります。"); err != nil {
+			return nil, false, err
+		}
+		return nil, true, nil
 	}
 	sort.Slice(prs, func(i, j int) bool { return prs[i].Number > prs[j].Number })
 	if _, err := fmt.Fprintln(out, "\nPR一覧:"); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	table := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	if _, err := fmt.Fprintln(table, "番号\t状態\tタイトル"); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if _, err := fmt.Fprintln(table, "----\t----\t--------"); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	for _, pr := range prs {
 		status := pullRequestStatus(pr)
 		if _, err := fmt.Fprintf(table, "%d\t%s\t%s\n", pr.Number, status, tableCell(pr.Title)); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 	if err := table.Flush(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	if _, err := fmt.Fprint(out, "\nPR番号を入力してください: "); err != nil {
-		return nil, err
+	for {
+		if _, err := fmt.Fprint(out, "\nPR番号を入力してください: "); err != nil {
+			return nil, false, err
+		}
+		numberText, err := readStringContext(ctx, reader)
+		if err != nil && len(numberText) == 0 {
+			return nil, false, fmt.Errorf("PR番号を読み取れません: %w", err)
+		}
+		numberText = strings.TrimSpace(numberText)
+		number, err := strconv.Atoi(numberText)
+		if err != nil || number < 1 {
+			if _, writeErr := fmt.Fprintf(out, "PR番号が不正です: %q。再入力してください。\n", numberText); writeErr != nil {
+				return nil, false, writeErr
+			}
+			continue
+		}
+		selected, err := loadPullRequest(ctx, workingDir, number, workspaceName)
+		if err != nil {
+			return nil, false, fmt.Errorf("PR #%dの取得に失敗しました: %w", number, err)
+		}
+		if _, err := fmt.Fprintf(out, "\n%s\n\n実行工程: %s\n", selected.Context(), pullRequestPhaseName(selected.Phase)); err != nil {
+			return nil, false, err
+		}
+		return selected, false, nil
 	}
-	numberText, err := readStringContext(ctx, reader)
-	if err != nil && len(numberText) == 0 {
-		return nil, fmt.Errorf("PR番号を読み取れません: %w", err)
-	}
-	number, err := strconv.Atoi(strings.TrimSpace(numberText))
-	if err != nil || number < 1 {
-		return nil, fmt.Errorf("PR番号が不正です: %q", strings.TrimSpace(numberText))
-	}
-	selected, err := loadPullRequest(ctx, workingDir, number, workspaceName)
-	if err != nil {
-		return nil, fmt.Errorf("PR #%dの取得に失敗しました: %w", number, err)
-	}
-	if _, err := fmt.Fprintf(out, "\n%s\n\n実行工程: %s\n", selected.Context(), pullRequestPhaseName(selected.Phase)); err != nil {
-		return nil, err
-	}
-	return selected, nil
 }
 
 func pullRequestPhaseName(phase prworkflow.Phase) string {
