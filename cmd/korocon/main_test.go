@@ -107,6 +107,37 @@ func TestSelectPullRequestDisplaysStatusAndLoadsSelectedNumber(t *testing.T) {
 	}
 }
 
+func TestGitHubInformationSelectionAcceptsCaseInsensitiveShortcutsAndDefaultsToIssue(t *testing.T) {
+	originalLoadIssue := loadIssue
+	originalListPRs, originalLoadPR := listPullRequests, loadPullRequest
+	t.Cleanup(func() {
+		loadIssue = originalLoadIssue
+		listPullRequests, loadPullRequest = originalListPRs, originalLoadPR
+	})
+	loadIssue = func(_ context.Context, _ string, number int, _ string) (*issueworkflow.Workflow, error) {
+		return &issueworkflow.Workflow{Issue: issueworkflow.Issue{Number: number, Title: "selected"}, Phase: issueworkflow.PhaseDesign}, nil
+	}
+	var out strings.Builder
+	_, issue, pr, err := selectGitHubInformation(context.Background(), strings.NewReader("\n42\n"), &out, ".", ".workspace", selectionModeDefault, "")
+	if err != nil || issue == nil || pr != nil || issue.Issue.Number != 42 {
+		t.Fatalf("issue=%+v pr=%+v err=%v", issue, pr, err)
+	}
+	if !strings.Contains(out.String(), "取得する情報を選択してください (ISSUE/PR): ") {
+		t.Fatalf("output = %q", out.String())
+	}
+
+	listPullRequests = func(context.Context, string) ([]prworkflow.PullRequest, error) {
+		return []prworkflow.PullRequest{{Number: 9, Title: "selected", State: "OPEN"}}, nil
+	}
+	loadPullRequest = func(_ context.Context, _ string, number int, _ string) (*prworkflow.Workflow, error) {
+		return &prworkflow.Workflow{PR: prworkflow.PullRequest{Number: number, Title: "selected", State: "OPEN"}, Phase: prworkflow.PhaseReview}, nil
+	}
+	_, issue, pr, err = selectGitHubInformation(context.Background(), strings.NewReader("P\n9\n"), &out, ".", ".workspace", selectionModeDefault, "")
+	if err != nil || issue != nil || pr == nil || pr.PR.Number != 9 {
+		t.Fatalf("issue=%+v pr=%+v err=%v", issue, pr, err)
+	}
+}
+
 func TestPullRequestStatusUsesJapaneseStateLabel(t *testing.T) {
 	status := pullRequestStatus(prworkflow.PullRequest{State: "OPEN", Labels: []prworkflow.Label{{Name: "state:review_approved"}}})
 	if status != "レビュー承認済み" {
@@ -338,7 +369,7 @@ func TestRunInteractiveFallsBackToInitialSelectionWhenRequestedIssueIsMissing(t 
 	}
 	if !strings.Contains(out.String(), "指定された対象を取得できませんでした") ||
 		!strings.Contains(out.String(), "通常の選択へ戻ります") ||
-		!strings.Contains(out.String(), "取得する情報を選択してください (issue/pr):") {
+		!strings.Contains(out.String(), "取得する情報を選択してください (ISSUE/PR):") {
 		t.Fatalf("output = %q", out.String())
 	}
 }

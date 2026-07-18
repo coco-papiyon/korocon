@@ -15,8 +15,10 @@ import (
 type Phase string
 
 const (
-	PhaseDesign         Phase = "design"
-	PhaseImplementation Phase = "implementation"
+	PhaseDesign              Phase = "design"
+	PhaseImplementation      Phase = "implementation"
+	PhaseDesignReady         Phase = "design_ready"
+	PhaseImplementationReady Phase = "implementation_ready"
 )
 
 const (
@@ -62,6 +64,7 @@ type Issue struct {
 	Number    int       `json:"number"`
 	Title     string    `json:"title"`
 	Body      string    `json:"body"`
+	State     string    `json:"state"`
 	Labels    []Label   `json:"labels"`
 	Comments  []Comment `json:"comments"`
 	URL       string    `json:"url"`
@@ -103,6 +106,7 @@ type Workflow struct {
 	Issue                 Issue
 	Phase                 Phase
 	workspaceName         string
+	pendingResult         string
 	publishImplementation func(context.Context, string) (string, error)
 }
 
@@ -134,7 +138,7 @@ func load(ctx context.Context, workingDir string, number int, workspaceName stri
 	if number < 1 {
 		return nil, errors.New("issue number must be greater than zero")
 	}
-	raw, err := runner.Run(ctx, workingDir, "issue", "view", strconv.Itoa(number), "--json", "number,title,body,labels,comments,url,author,assignees")
+	raw, err := runner.Run(ctx, workingDir, "issue", "view", strconv.Itoa(number), "--json", "number,title,body,state,labels,comments,url,author,assignees")
 	if err != nil {
 		return nil, err
 	}
@@ -142,11 +146,28 @@ func load(ctx context.Context, workingDir string, number int, workspaceName stri
 	if err := json.Unmarshal(raw, &selected); err != nil {
 		return nil, fmt.Errorf("decode issue #%d: %w", number, err)
 	}
+	if state := strings.TrimSpace(selected.State); state != "" && !strings.EqualFold(state, "open") {
+		return nil, fmt.Errorf("Issue #%dはopenではありません (state: %s)", number, state)
+	}
 	phase, err := classify(selected.Labels)
 	if err != nil {
 		return nil, err
 	}
-	return &Workflow{dir: workingDir, runner: runner, Issue: selected, Phase: phase, workspaceName: workspaceName}, nil
+	workflow := &Workflow{dir: workingDir, runner: runner, Issue: selected, Phase: phase, workspaceName: workspaceName}
+	if phase == PhaseDesignReady || phase == PhaseImplementationReady {
+		resultPath, pathErr := workflow.artifactPath()
+		if pathErr != nil {
+			return nil, pathErr
+		}
+		result, readErr := os.ReadFile(resultPath)
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return nil, fmt.Errorf("read approval result: %w", readErr)
+		}
+		if readErr == nil {
+			workflow.pendingResult = string(result)
+		}
+	}
+	return workflow, nil
 }
 
 func classify(labels []Label) (Phase, error) {
@@ -160,11 +181,11 @@ func classify(labels []Label) (Phase, error) {
 	}
 	switch {
 	case has("state:implementation_ready"):
-		return "", errors.New("issueは実装完了の承認待ちです")
+		return PhaseImplementationReady, nil
 	case has("state:implementation_approved"), has("state:pr_created"):
 		return "", errors.New("issueの実装工程は完了しています")
 	case has(labelDesignReady):
-		return "", errors.New("issueは設計完了の承認待ちです")
+		return PhaseDesignReady, nil
 	case has(labelDesignApproved), has(labelImplementationRunning):
 		return PhaseImplementation, nil
 	default:
@@ -194,6 +215,8 @@ func (w *Workflow) SetPhase(phase Phase) {
 	w.Phase = phase
 }
 
+func (w *Workflow) PendingApprovalResult() string { return w.pendingResult }
+
 func (w *Workflow) SetImplementationPublisher(publisher func(context.Context, string) (string, error)) {
 	w.publishImplementation = publisher
 }
@@ -210,7 +233,7 @@ func SyncRepository(ctx context.Context, dir string) error {
 
 func (w *Workflow) RevisionPrompt(feedback string) string {
 	action := "再設計"
-	if w.Phase == PhaseImplementation {
+	if w.Phase == PhaseImplementation || w.Phase == PhaseImplementationReady {
 		action = "再実装"
 	}
 	return strings.Join([]string{
@@ -252,7 +275,7 @@ func (w *Workflow) Context() string {
 
 func (w *Workflow) Start(ctx context.Context) error {
 	label := labelDesignRunning
-	if w.Phase == PhaseImplementation {
+	if w.Phase == PhaseImplementation || w.Phase == PhaseImplementationReady {
 		label = labelImplementationRunning
 	}
 	return w.setStateLabel(ctx, label)
@@ -290,7 +313,7 @@ func (w *Workflow) SaveResult(result string) (string, error) {
 }
 
 func (w *Workflow) Approve(ctx context.Context, result string) (string, error) {
-	if w.Phase == PhaseImplementation {
+	if w.Phase == PhaseImplementation || w.Phase == PhaseImplementationReady {
 		if w.publishImplementation == nil {
 			return "", errors.New("implementation publisher is not configured")
 		}
@@ -326,7 +349,7 @@ func (w *Workflow) artifactPath() (string, error) {
 		return "", errors.New("workspace name must be a directory name")
 	}
 	subdir := "design"
-	if w.Phase == PhaseImplementation {
+	if w.Phase == PhaseImplementation || w.Phase == PhaseImplementationReady {
 		subdir = "implementation"
 	}
 	name := fmt.Sprintf("%d_%s.md", w.Issue.Number, sanitizePart(w.Issue.Title))

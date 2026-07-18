@@ -488,11 +488,7 @@ func selectRequestedGitHubInformationWithFilters(ctx context.Context, out io.Wri
 		if !matchesIssueFilters(selected.Issue, filters) {
 			return nil, nil, fmt.Errorf("Issue #%dは指定されたフィルタ条件に一致しません", requested.issueNumber)
 		}
-		phaseName := "設計"
-		if selected.Phase == issueworkflow.PhaseImplementation {
-			phaseName = "実装"
-		}
-		if _, err := fmt.Fprintf(out, "\n%s\n\n実行工程: %s\n", selected.Context(), phaseName); err != nil {
+		if err := writeSelectedIssue(out, selected, issuePhaseName(selected.Phase)); err != nil {
 			return nil, nil, err
 		}
 		return selected, nil, nil
@@ -578,9 +574,9 @@ func selectGitHubInformation(ctx context.Context, in io.Reader, out io.Writer, w
 		return remainingInput(in, reader), nil, selected, nil
 	}
 	for {
-		prompt := "取得する情報を選択してください (issue/pr): "
+		prompt := "取得する情報を選択してください (ISSUE/PR): "
 		if mode == selectionModeImplementer {
-			prompt = "実装者が担当する対象を選択してください (issue/pr): "
+			prompt = "実装者が担当する対象を選択してください (ISSUE/PR): "
 		}
 		if _, err := fmt.Fprint(out, prompt); err != nil {
 			return nil, nil, nil, err
@@ -590,20 +586,26 @@ func selectGitHubInformation(ctx context.Context, in io.Reader, out io.Writer, w
 			return nil, nil, nil, fmt.Errorf("GitHub情報の選択を読み取れません: %w", err)
 		}
 		switch strings.ToLower(strings.TrimSpace(choice)) {
-		case "1", "issue", "i":
+		case "", "1", "issue", "i":
 			selected, err := selectIssueForRole(ctx, reader, out, workingDir, workspaceName, mode, assigneeFilter, filters)
 			if err != nil {
-				return nil, nil, nil, err
+				if _, writeErr := fmt.Fprintf(out, "%v\n", err); writeErr != nil {
+					return nil, nil, nil, writeErr
+				}
+				continue
 			}
 			return remainingInput(in, reader), selected, nil, nil
 		case "2", "pr", "p":
 			selected, err := selectPullRequestForRole(ctx, reader, out, workingDir, workspaceName, mode, assigneeFilter, filters)
 			if err != nil {
-				return nil, nil, nil, err
+				if _, writeErr := fmt.Fprintf(out, "%v\n", err); writeErr != nil {
+					return nil, nil, nil, writeErr
+				}
+				continue
 			}
 			return remainingInput(in, reader), nil, selected, nil
 		default:
-			if _, writeErr := fmt.Fprintln(out, "issue または pr を入力してください。"); writeErr != nil {
+			if _, writeErr := fmt.Fprintln(out, "ISSUE または PR を入力してください。"); writeErr != nil {
 				return nil, nil, nil, writeErr
 			}
 		}
@@ -672,11 +674,7 @@ func selectIssueForRole(ctx context.Context, reader *bufio.Reader, out io.Writer
 	if err != nil {
 		return nil, fmt.Errorf("Issue #%dの取得に失敗しました: %w", number, err)
 	}
-	phaseName := "設計"
-	if selected.Phase == issueworkflow.PhaseImplementation {
-		phaseName = "実装"
-	}
-	_, err = fmt.Fprintf(out, "\n%s\n\n実行工程: %s\n", selected.Context(), phaseName)
+	err = writeSelectedIssue(out, selected, issuePhaseName(selected.Phase))
 	return selected, err
 }
 
@@ -704,6 +702,31 @@ func issueStatus(issue issueworkflow.Issue) string {
 		}
 	}
 	return "設計"
+}
+
+func issuePhaseName(phase issueworkflow.Phase) string {
+	switch phase {
+	case issueworkflow.PhaseImplementation, issueworkflow.PhaseImplementationReady:
+		return "実装"
+	default:
+		return "設計"
+	}
+}
+
+func writeSelectedIssue(out io.Writer, selected *issueworkflow.Workflow, phaseName string) error {
+	if _, err := fmt.Fprintf(out, "\n%s\n\n実行工程: %s\n", selected.Context(), phaseName); err != nil {
+		return err
+	}
+	if selected.Phase != issueworkflow.PhaseDesignReady && selected.Phase != issueworkflow.PhaseImplementationReady {
+		return nil
+	}
+	result := selected.PendingApprovalResult()
+	if strings.TrimSpace(result) == "" {
+		_, err := fmt.Fprintf(out, "保存済みの%s結果がないため、Issue #%dの%sを再実行します。\n", phaseName, selected.Issue.Number, phaseName)
+		return err
+	}
+	_, err := fmt.Fprintf(out, "\n---\n\n%s\n%sが完了しました。承認する場合は未入力状態でEnter、もしくは承認、approve、aのいずれかを入力してください。\n修正する場合は内容を入力してください。AIへ送信して再%sします。\n", result, phaseName, phaseName)
+	return err
 }
 
 func listIssuesForSelection(ctx context.Context, workingDir, search string) ([]issueworkflow.Issue, error) {
@@ -844,11 +867,7 @@ func selectIssue(ctx context.Context, reader *bufio.Reader, out io.Writer, worki
 	if err != nil {
 		return nil, fmt.Errorf("issue #%dの取得に失敗しました: %w", number, err)
 	}
-	phaseName := "設計"
-	if selected.Phase == issueworkflow.PhaseImplementation {
-		phaseName = "実装"
-	}
-	if _, err := fmt.Fprintf(out, "\n%s\n\n実行工程: %s\n", selected.Context(), phaseName); err != nil {
+	if err := writeSelectedIssue(out, selected, issuePhaseName(selected.Phase)); err != nil {
 		return nil, err
 	}
 	return selected, nil

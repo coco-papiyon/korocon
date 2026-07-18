@@ -27,6 +27,13 @@ type fakeReviewWorkflow struct {
 	finishErr    error
 }
 
+type fakePendingReviewWorkflow struct {
+	*fakeReviewWorkflow
+	pendingResult string
+}
+
+func (w *fakePendingReviewWorkflow) PendingApprovalResult() string { return w.pendingResult }
+
 func (w *fakeReviewWorkflow) IssueNumber() int { return w.number }
 func (w *fakeReviewWorkflow) Prompt() string   { return w.prompt }
 func (w *fakeReviewWorkflow) RevisionPrompt(feedback string) string {
@@ -84,6 +91,31 @@ func TestIssueReviewApprovesEmptyInput(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "Issue #2の実装を開始します。") {
 		t.Fatalf("implementation start message was printed before implementation job started: %q", out.String())
+	}
+}
+
+func TestIssueReviewRerunsReadyPhaseWhenResultIsMissing(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		ready   issueworkflow.Phase
+		phase   issueworkflow.Phase
+		wantJob bool
+	}{
+		{name: "design", ready: issueworkflow.PhaseDesignReady, phase: issueworkflow.PhaseDesign},
+		{name: "implementation", ready: issueworkflow.PhaseImplementationReady, phase: issueworkflow.PhaseImplementation, wantJob: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workflow := &fakePendingReviewWorkflow{fakeReviewWorkflow: &fakeReviewWorkflow{prompt: test.name}}
+			controller := newIssueReviewController(workflow, test.ready, &bytes.Buffer{}, func(prompt string) *daemon.JobSpec {
+				return &daemon.JobSpec{Prompt: prompt}
+			}, nil)
+			if workflow.phase != test.phase || controller.InitialPrompt() != test.name {
+				t.Fatalf("phase=%s prompt=%q", workflow.phase, controller.InitialPrompt())
+			}
+			if (controller.InitialJob() != nil) != test.wantJob {
+				t.Fatalf("initial job = %+v", controller.InitialJob())
+			}
+		})
 	}
 }
 

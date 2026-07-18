@@ -63,11 +63,41 @@ func TestLoadSelectsImplementationOnlyAfterDesignApproval(t *testing.T) {
 }
 
 func TestLoadStopsAtApprovalStates(t *testing.T) {
-	for _, label := range []string{"state:design_ready", "state:implementation_ready", "state:implementation_approved"} {
-		runner := &fakeRunner{responses: []string{`{"number":8,"title":"waiting","labels":[{"name":"` + label + `"}]}`}}
-		if _, err := load(context.Background(), ".", 8, ".workspace", runner); err == nil {
-			t.Fatalf("label %s should not start another workflow", label)
+	for _, test := range []struct {
+		label  string
+		phase  Phase
+		subdir string
+	}{
+		{label: "state:design_ready", phase: PhaseDesignReady, subdir: "design"},
+		{label: "state:implementation_ready", phase: PhaseImplementationReady, subdir: "implementation"},
+	} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, ".workspace", test.subdir, "8_waiting.md")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
 		}
+		if err := os.WriteFile(path, []byte("saved result"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runner := &fakeRunner{responses: []string{`{"number":8,"title":"waiting","labels":[{"name":"` + test.label + `"}]}`}}
+		workflow, err := load(context.Background(), dir, 8, ".workspace", runner)
+		if err != nil {
+			t.Fatalf("label %s: %v", test.label, err)
+		}
+		if workflow.Phase != test.phase || workflow.PendingApprovalResult() != "saved result" {
+			t.Fatalf("label %s: phase=%s result=%q", test.label, workflow.Phase, workflow.PendingApprovalResult())
+		}
+	}
+	runner := &fakeRunner{responses: []string{`{"number":8,"title":"waiting","labels":[{"name":"state:implementation_approved"}]}`}}
+	if _, err := load(context.Background(), ".", 8, ".workspace", runner); err == nil {
+		t.Fatal("implementation_approved should not start another workflow")
+	}
+}
+
+func TestLoadRejectsClosedIssue(t *testing.T) {
+	runner := &fakeRunner{responses: []string{`{"number":8,"title":"closed","state":"CLOSED","labels":[]}`}}
+	if _, err := load(context.Background(), ".", 8, ".workspace", runner); err == nil || !strings.Contains(err.Error(), "openではありません") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

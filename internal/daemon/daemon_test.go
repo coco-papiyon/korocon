@@ -210,7 +210,7 @@ func TestRunCallsFinishHookAfterDisplayingResult(t *testing.T) {
 	}
 }
 
-func TestRunDisplaysProviderAndModelWhenJobStarts(t *testing.T) {
+func TestRunDisplaysRunningStatusWhenJobStarts(t *testing.T) {
 	var out, status strings.Builder
 	err := Run(context.Background(), strings.NewReader("first\n"), &out, Config{
 		Provider:  "copilot",
@@ -221,8 +221,29 @@ func TestRunDisplaysProviderAndModelWhenJobStarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(status.String(), "provider: copilot") || !strings.Contains(status.String(), "model: gpt-test") {
-		t.Fatalf("status does not include provider and model: %q", status.String())
+	if !strings.Contains(status.String(), "[job 1] 実行中...") || strings.Contains(status.String(), "provider: copilot") || strings.Contains(status.String(), "model: gpt-test") {
+		t.Fatalf("unexpected job status: %q", status.String())
+	}
+}
+
+func TestRunDisplaysJobStartAfterStartHook(t *testing.T) {
+	var status strings.Builder
+	err := Run(context.Background(), strings.NewReader(""), &strings.Builder{}, Config{
+		Provider: "copilot", Model: "gpt-test", Binary: "/bin/echo", StatusOut: &status,
+		InitialJob: &JobSpec{Prompt: "prompt"},
+		OnJobStart: func(context.Context, uint64, string) error {
+			_, _ = status.WriteString("Issue #1の実装を開始します。\n---\n")
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := status.String()
+	messageAt := strings.Index(output, "Issue #1の実装を開始します。")
+	jobAt := strings.Index(output, "[job 1] 実行中")
+	if messageAt < 0 || jobAt < 0 || messageAt > jobAt {
+		t.Fatalf("job start order = %q", output)
 	}
 }
 

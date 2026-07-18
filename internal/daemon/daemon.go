@@ -462,7 +462,6 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		modelMu.RLock()
 		jobModel := currentModel
 		modelMu.RUnlock()
-		status("[job %d] 実行中（provider: %s, model: %s）.", id, provider, jobModel)
 		if cfg.BeforeJob != nil {
 			if err := cfg.BeforeJob(ctx, id, prompt); err != nil {
 				_ = writeResult(id, "", fmt.Errorf("prepare job: %w", err))
@@ -479,6 +478,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				return
 			}
 		}
+		status("[job %d] 実行中...", id)
 		if spec.Execute != nil || provider == "codex" {
 			residentJobs <- residentJob{id: id, prompt: prompt, model: jobModel, execute: spec.Execute}
 			return

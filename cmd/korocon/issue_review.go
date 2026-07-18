@@ -47,6 +47,20 @@ func newIssueReviewController(workflow reviewWorkflow, phase issueworkflow.Phase
 		closeImplementation: closeImplementation,
 	}
 	c.registerPrompt(workflow.Prompt())
+	if phase == issueworkflow.PhaseDesignReady || phase == issueworkflow.PhaseImplementationReady {
+		if provider, ok := workflow.(interface{ PendingApprovalResult() string }); ok {
+			c.result = provider.PendingApprovalResult()
+			if strings.TrimSpace(c.result) != "" {
+				c.pending = true
+			} else if phase == issueworkflow.PhaseDesignReady {
+				c.phase = issueworkflow.PhaseDesign
+				workflow.SetPhase(issueworkflow.PhaseDesign)
+			} else {
+				c.phase = issueworkflow.PhaseImplementation
+				workflow.SetPhase(issueworkflow.PhaseImplementation)
+			}
+		}
+	}
 	return c
 }
 
@@ -58,6 +72,9 @@ func (c *issueReviewController) InitialJob() *daemon.JobSpec {
 }
 
 func (c *issueReviewController) InitialPrompt() string {
+	if c.phase == issueworkflow.PhaseDesignReady || c.phase == issueworkflow.PhaseImplementationReady {
+		return ""
+	}
 	return c.workflow.Prompt()
 }
 
@@ -143,6 +160,13 @@ func (c *issueReviewController) HandleInput(ctx context.Context, input string) (
 	}
 	result := c.result
 	c.mu.Unlock()
+	if c.phase == issueworkflow.PhaseDesignReady {
+		c.phase = issueworkflow.PhaseDesign
+		c.workflow.SetPhase(issueworkflow.PhaseDesign)
+	} else if c.phase == issueworkflow.PhaseImplementationReady {
+		c.phase = issueworkflow.PhaseImplementation
+		c.workflow.SetPhase(issueworkflow.PhaseImplementation)
+	}
 
 	if isApprovalInput(input) {
 		prURL, approveErr := c.workflow.Approve(ctx, result)
