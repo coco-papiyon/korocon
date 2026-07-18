@@ -48,6 +48,20 @@ func TestLoadFileReadsRoleAISettings(t *testing.T) {
 	}
 }
 
+func TestLoadFileReadsPullRequestReviewer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, []byte(`{"reviewer":" octocat "}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configured, err := loadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured.Reviewer != "octocat" {
+		t.Fatalf("reviewer = %q", configured.Reviewer)
+	}
+}
+
 func TestLoadFileRejectsUnsupportedRoleProvider(t *testing.T) {
 	path := filepath.Join(t.TempDir(), FileName)
 	if err := os.WriteFile(path, []byte(`{"reviewerProvider":"unknown"}`), 0o600); err != nil {

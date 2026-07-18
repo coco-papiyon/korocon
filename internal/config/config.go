@@ -28,6 +28,7 @@ type Config struct {
 	VerifierModel           string   `json:"verifierModel,omitempty"`
 	ReviewerProvider        string   `json:"reviewerProvider,omitempty"`
 	ReviewerModel           string   `json:"reviewerModel,omitempty"`
+	Reviewer                string   `json:"reviewer,omitempty"`
 }
 
 var defaultAllowedCommands = []string{
@@ -149,6 +150,7 @@ func loadFile(path string) (Config, error) {
 		return Config{}, fmt.Errorf("config reviewerProvider: %w", err)
 	}
 	configured.ReviewerModel = strings.TrimSpace(configured.ReviewerModel)
+	configured.Reviewer = strings.TrimSpace(configured.Reviewer)
 	return configured, nil
 }
 

@@ -227,7 +227,7 @@ func TestPublishCommitsPushesAndCreatesPullRequest(t *testing.T) {
 
 	engine := New(Config{
 		RepositoryDir: repository, ImplementationDirectory: "../", BranchNamePattern: "issue_#<issue番号>",
-		BaseBranch: "main", IssueNumber: 42, IssueTitle: "Add feature",
+		BaseBranch: "main", IssueNumber: 42, IssueTitle: "Add feature", Reviewer: "octocat",
 	})
 	worktree, branch, err := engine.ensureWorktree(context.Background())
 	if err != nil {
@@ -267,7 +267,7 @@ func TestPublishCommitsPushesAndCreatesPullRequest(t *testing.T) {
 		t.Fatalf("url = %q", url)
 	}
 	args := strings.Join(createArgs, " ")
-	for _, expected := range []string{"pr create", "--base main", "--title Add feature", "--head issue_#42", "# 実装結果", "saved implementation result", "Closes #42"} {
+	for _, expected := range []string{"pr create", "--base main", "--title Add feature", "--head issue_#42", "--assignee @me", "--reviewer octocat", "# 実装結果", "saved implementation result", "Closes #42"} {
 		if !strings.Contains(args, expected) {
 			t.Fatalf("gh args do not contain %q: %q", expected, args)
 		}
@@ -304,6 +304,16 @@ func TestPublishReusesExistingPullRequest(t *testing.T) {
 	// Exercise only the idempotent lookup directly; git publication is covered above.
 	if url, ok := engine.existingPullRequest(context.Background()); !ok || url != "https://github.com/acme/repo/pull/1" {
 		t.Fatalf("existingPullRequest() = (%q, %v)", url, ok)
+	}
+}
+
+func TestBuildPullRequestCreateArgsOmitsUnsetReviewer(t *testing.T) {
+	args := strings.Join(buildPullRequestCreateArgs("main", "title", "body", "branch", "  "), " ")
+	if !strings.Contains(args, "--assignee @me") {
+		t.Fatalf("PR assignee was not set: %q", args)
+	}
+	if strings.Contains(args, "--reviewer") {
+		t.Fatalf("unset reviewer was added: %q", args)
 	}
 }
 

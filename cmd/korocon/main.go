@@ -246,7 +246,11 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 	if startupCommand == "" {
 		startupCommand = "未設定"
 	}
-	fmt.Fprintf(stderr, "mode: %s\nimplementer: %s / %s / %s\nverifier: %s / %s / %s\nreviewer: %s / %s / %s\nconfig: %s\nworkspace: %s\nbranch: %s\nbase branch: %s\nimplementation directory: %s\nimplementation loops: %d\nstartup command: %s\nauto-approved commands: %d\nlog: %s\n", mode, implementer.Provider, implementer.Model, aiBinaryName(implementer), verifier.Provider, verifier.Model, aiBinaryName(verifier), reviewer.Provider, reviewer.Model, aiBinaryName(reviewer), configPath, configured.WorkspaceName, configured.BranchNamePattern, configured.BaseBranch, configured.ImplementationDirectory, configured.ImplementationLoopCount, startupCommand, len(configured.BuiltinAllowedCommands), *logPath)
+	githubReviewer := configured.Reviewer
+	if githubReviewer == "" {
+		githubReviewer = "未設定"
+	}
+	fmt.Fprintf(stderr, "mode: %s\nimplementer: %s / %s / %s\nverifier: %s / %s / %s\nreviewer: %s / %s / %s\ngithub reviewer: %s\nconfig: %s\nworkspace: %s\nbranch: %s\nbase branch: %s\nimplementation directory: %s\nimplementation loops: %d\nstartup command: %s\nauto-approved commands: %d\nlog: %s\n", mode, implementer.Provider, implementer.Model, aiBinaryName(implementer), verifier.Provider, verifier.Model, aiBinaryName(verifier), reviewer.Provider, reviewer.Model, aiBinaryName(reviewer), githubReviewer, configPath, configured.WorkspaceName, configured.BranchNamePattern, configured.BaseBranch, configured.ImplementationDirectory, configured.ImplementationLoopCount, startupCommand, len(configured.BuiltinAllowedCommands), *logPath)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	selectionInput := in
@@ -314,7 +318,8 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 					BranchNamePattern:       configured.BranchNamePattern, LoopCount: configured.ImplementationLoopCount,
 					BaseBranch:  configured.BaseBranch,
 					IssueNumber: selectedIssue.Issue.Number, IssueTitle: selectedIssue.Issue.Title,
-					IssueContext: selectedIssue.Context(), LogOut: logFile, LogErr: logFile,
+					IssueContext: selectedIssue.Context(), Reviewer: configured.Reviewer,
+					LogOut: logFile, LogErr: logFile,
 				})
 				selectedIssue.SetImplementationPublisher(implementationEngine.Publish)
 				defer implementationEngine.Close()

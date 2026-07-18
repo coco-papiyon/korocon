@@ -101,3 +101,18 @@ func TestLineEditorSubmitsEmptyInput(t *testing.T) {
 		t.Fatal("empty input was not submitted")
 	}
 }
+
+func TestLineEditorFinishesExternallyRenderedPromptOnEmptyInput(t *testing.T) {
+	var out strings.Builder
+	e := lineEditor{out: &out, rows: [][]rune{{}}}
+	e.render()
+	out.Reset()
+
+	e.handle(13, nil, func(string) {})
+	_, _ = io.WriteString(&out, "> ")
+	e.handle(13, nil, func(string) {})
+
+	if got, want := out.String(), "\r\n> \r\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}

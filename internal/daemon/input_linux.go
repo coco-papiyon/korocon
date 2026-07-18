@@ -307,6 +307,10 @@ func runeWidth(r rune) int {
 
 func (e *lineEditor) finishInput() {
 	if e.renderedRows == 0 {
+		// After a submitted job, daemon.Run prints the next prompt directly.
+		// The editor therefore has no rendered rows recorded even though "> " is
+		// visible. Always finish that prompt line before handling empty input.
+		_, _ = io.WriteString(e.out, "\r\n")
 		return
 	}
 	if below := e.renderedRows - 1 - e.renderedCursor; below > 0 {

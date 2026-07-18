@@ -31,6 +31,7 @@ type Config struct {
 	IssueNumber             int
 	IssueTitle              string
 	IssueContext            string
+	Reviewer                string
 	LogOut                  io.Writer
 	LogErr                  io.Writer
 }
@@ -182,10 +183,8 @@ func (e *Engine) Publish(ctx context.Context, result string) (string, error) {
 		artifact = string(saved)
 	}
 	body := buildPullRequestBody(e.cfg.IssueNumber, artifact)
-	out, err := runGHCommand(ctx, e.worktree,
-		"pr", "create", "--base", e.cfg.BaseBranch, "--title", e.cfg.IssueTitle,
-		"--body", body, "--head", e.branch,
-	)
+	args := buildPullRequestCreateArgs(e.cfg.BaseBranch, e.cfg.IssueTitle, body, e.branch, e.cfg.Reviewer)
+	out, err := runGHCommand(ctx, e.worktree, args...)
 	if err != nil {
 		return "", fmt.Errorf("create pull request: %w", err)
 	}
@@ -269,6 +268,17 @@ func buildPullRequestBody(issueNumber int, result string) string {
 		artifact = strings.TrimSpace(strings.Join(lines[1:], "\n"))
 	}
 	return strings.Join([]string{"# 実装結果", "", artifact, "", "Closes #" + strconv.Itoa(issueNumber)}, "\n")
+}
+
+func buildPullRequestCreateArgs(base, title, body, head, reviewer string) []string {
+	args := []string{
+		"pr", "create", "--base", base, "--title", title,
+		"--body", body, "--head", head, "--assignee", "@me",
+	}
+	if reviewer = strings.TrimSpace(reviewer); reviewer != "" {
+		args = append(args, "--reviewer", reviewer)
+	}
+	return args
 }
 
 func pullRequestURL(output string) string {

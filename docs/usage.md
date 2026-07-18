@@ -38,6 +38,7 @@ tools/
   "verifierModel": "gpt-5.4-mini",
   "reviewerProvider": "copilot",
   "reviewerModel": "claude-sonnet-4.5",
+  "reviewer": "octocat",
   "startupCommand": "go run ./cmd/app",
   "builtinAllowedCommands": ["git add", "git diff", "git status", "go test"]
 }
@@ -59,6 +60,7 @@ tools/
 | `verifierModel` | 実装者と同じ | 検証者のModelです。 |
 | `reviewerProvider` | 実装者と同じ | PRレビューを担当するProviderです。 |
 | `reviewerModel` | 実装者と同じ | レビューアのModelです。 |
+| `reviewer` | 未設定 | 新規PRでレビューを依頼するGitHubユーザーです。PRのassigneeは常に現在のGitHubユーザー（`@me`）になります。 |
 
 設定ファイル値はCLI引数で上書きできます。`--provider`と`--model`は互換性のため残しており、実装者指定として扱います。
 

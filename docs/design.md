@@ -139,7 +139,7 @@ Codexからコマンド実行の承認要求を受信すると許可リストを
 
 実装用または検証用Codexから応答を受信するたび、JSON解析や次工程へ進む前に回数付きMarkdown成果物を保存します。保存失敗はその実装ジョブの失敗として扱います。
 
-実装承認時はworktreeの変更をstage・commitし、リモート同名ブランチが存在する場合は`pull --rebase`してからpushします。既存PRがなければ実装成果物と`Closes #<Issue番号>`を本文にして`gh pr create`を実行します。
+実装承認時はworktreeの変更をstage・commitし、リモート同名ブランチが存在する場合は`pull --rebase`してからpushします。既存PRがなければ実装成果物と`Closes #<Issue番号>`を本文にして`gh pr create`を実行します。新規PRのassigneeは現在のGitHubユーザー（`@me`）とし、configの`reviewer`が設定されている場合はそのGitHubユーザーをreviewerに指定します。
 
 フェーズ変更時はdaemonへ`実装N回目`または`検証N回目`を通知します。daemonはフェーズ開始時に表示ジョブ番号を採番し、`[job N] 実行中(<フェーズ>)...`を描画します。フェーズ変更前の現在行は`[job N] 完了(<フェーズ>)`として改行確定し、履歴として残します。同じフェーズ内の進捗更新では現在行だけを上書きします。
 

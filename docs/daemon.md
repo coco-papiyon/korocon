@@ -26,6 +26,7 @@ go build -o ./korocon ./cmd/korocon
   "verifierModel": "gpt-5.4-mini",
   "reviewerProvider": "copilot",
   "reviewerModel": "claude-sonnet-4.5",
+  "reviewer": "octocat",
   "builtinAllowedCommands": ["git add", "git diff", "git status", "go test"]
 }
 ```
