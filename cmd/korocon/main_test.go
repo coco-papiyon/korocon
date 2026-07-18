@@ -148,6 +148,7 @@ func TestPullRequestStatusUsesJapaneseStateLabel(t *testing.T) {
 func TestRoleSelectionTargets(t *testing.T) {
 	implementerPR := prworkflow.PullRequest{Labels: []prworkflow.Label{{Name: "state:pr_review_comment"}}}
 	reviewerPR := prworkflow.PullRequest{}
+	reviewFixedPR := prworkflow.PullRequest{Labels: []prworkflow.Label{{Name: "state:review_fixed"}}}
 	processedPR := prworkflow.PullRequest{Labels: []prworkflow.Label{{Name: "state:review_ready"}}}
 	approvedPR := prworkflow.PullRequest{Labels: []prworkflow.Label{{Name: "state:review_approved"}}}
 	if !pullRequestIsRoleTarget(implementerPR, selectionModeImplementer) || pullRequestIsRoleTarget(implementerPR, selectionModeReviewer) {
@@ -155,6 +156,9 @@ func TestRoleSelectionTargets(t *testing.T) {
 	}
 	if !pullRequestIsRoleTarget(reviewerPR, selectionModeReviewer) || pullRequestIsRoleTarget(reviewerPR, selectionModeImplementer) {
 		t.Fatalf("reviewer PR role selection is incorrect")
+	}
+	if !pullRequestIsRoleTarget(reviewFixedPR, selectionModeReviewer) {
+		t.Fatalf("review_fixed PR was not selected for reviewer mode")
 	}
 	if pullRequestIsRoleTarget(processedPR, selectionModeReviewer) || pullRequestIsRoleTarget(approvedPR, selectionModeReviewer) {
 		t.Fatalf("approved PR was selected for reviewer mode")

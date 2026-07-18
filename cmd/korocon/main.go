@@ -990,7 +990,7 @@ func pullRequestIsRoleTarget(pr prworkflow.PullRequest, mode selectionMode) bool
 	case selectionModeImplementer:
 		return prworkflow.HasConflict(pr) || prworkflow.PullRequestHasLabel(pr, "state:pr_conflict") || prworkflow.PullRequestHasLabel(pr, "state:pr_review_comment") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_design_running") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_design_ready") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_design_approved") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_implementation_running") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_implementation_ready") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_implementation_approved")
 	case selectionModeReviewer:
-		return !pullRequestHasStateLabel(pr) && !prworkflow.HasConflict(pr) && !prworkflow.PullRequestHasLabel(pr, "state:pr_conflict")
+		return (!pullRequestHasStateLabel(pr) || prworkflow.PullRequestHasLabel(pr, "state:review_fixed")) && !prworkflow.HasConflict(pr) && !prworkflow.PullRequestHasLabel(pr, "state:pr_conflict")
 	default:
 		return true
 	}
