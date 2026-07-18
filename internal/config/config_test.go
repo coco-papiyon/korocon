@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -24,6 +25,36 @@ func TestLoadFileUsesDefaultWhenMissing(t *testing.T) {
 	}
 	if !reflect.DeepEqual(configured.BuiltinAllowedCommands, DefaultAllowedCommands()) {
 		t.Fatalf("builtinAllowedCommands = %+v", configured.BuiltinAllowedCommands)
+	}
+	if configured.ImplementerProvider != "codex" || configured.ImplementerModel != "gpt-5.6-luna" || configured.VerifierProvider != "" || configured.ReviewerProvider != "" {
+		t.Fatalf("role defaults = %+v", configured)
+	}
+}
+
+func TestLoadFileReadsRoleAISettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	content := []byte(`{"implementerProvider":"copilot","implementerModel":"claude-sonnet-4.5","verifierProvider":"codex","verifierModel":"gpt-5.4-mini","reviewerProvider":"github_copilot","reviewerModel":"claude-opus-4.6"}`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configured, err := loadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured.ImplementerProvider != "copilot" || configured.ImplementerModel != "claude-sonnet-4.5" ||
+		configured.VerifierProvider != "codex" || configured.VerifierModel != "gpt-5.4-mini" ||
+		configured.ReviewerProvider != "copilot" || configured.ReviewerModel != "claude-opus-4.6" {
+		t.Fatalf("role settings = %+v", configured)
+	}
+}
+
+func TestLoadFileRejectsUnsupportedRoleProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, []byte(`{"reviewerProvider":"unknown"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadFile(path); err == nil || !strings.Contains(err.Error(), "reviewerProvider") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

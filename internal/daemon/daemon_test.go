@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -9,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/coco-papiyon/korocon/internal/runner"
 )
 
 func TestJSONResultWriterDisplaysFinalAgentMessage(t *testing.T) {
@@ -144,6 +147,38 @@ func TestRunAllowsInputHandlerToConsumeEmptyLineAndStartPrompt(t *testing.T) {
 	}
 }
 
+func TestRunReturnsRestartWhenInputHandlerRequestsSelectionRestart(t *testing.T) {
+	err := Run(context.Background(), strings.NewReader("restart\n"), &strings.Builder{}, Config{
+		Provider: "copilot", Binary: "/bin/echo",
+		HandleInput: func(context.Context, string) (InputAction, error) {
+			return InputAction{Handled: true, Restart: true}, nil
+		},
+	})
+	if !errors.Is(err, ErrRestart) {
+		t.Fatalf("Run() error = %v, want ErrRestart", err)
+	}
+}
+
+func TestRunRestartLeavesFollowingBufferedInput(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("restart\nissue\n"))
+	err := Run(context.Background(), reader, &strings.Builder{}, Config{
+		Provider: "copilot", Binary: "/bin/echo",
+		HandleInput: func(context.Context, string) (InputAction, error) {
+			return InputAction{Handled: true, Restart: true}, nil
+		},
+	})
+	if !errors.Is(err, ErrRestart) {
+		t.Fatalf("Run() error = %v, want ErrRestart", err)
+	}
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line != "issue\n" {
+		t.Fatalf("remaining input = %q, want issue\\n", line)
+	}
+}
+
 func TestRunCallsFinishHookAfterDisplayingResult(t *testing.T) {
 	var display strings.Builder
 	err := Run(context.Background(), strings.NewReader("prompt\n"), &display, Config{
@@ -176,6 +211,28 @@ func TestRunDisplaysProviderAndModelWhenJobStarts(t *testing.T) {
 	}
 	if !strings.Contains(status.String(), "provider: copilot") || !strings.Contains(status.String(), "model: gpt-test") {
 		t.Fatalf("status does not include provider and model: %q", status.String())
+	}
+}
+
+func TestRunExecutesCustomJobWhenPrimaryProviderIsCopilot(t *testing.T) {
+	var result strings.Builder
+	called := false
+	usedModel := ""
+	err := Run(context.Background(), strings.NewReader(""), &strings.Builder{}, Config{
+		Provider: "copilot", Binary: "/bin/echo", ResultOut: &result,
+		InitialJob: &JobSpec{Prompt: "fix review", Execute: func(_ context.Context, model string, _ runner.ServerRequestHandler, setPhase func(string), _ func()) (runner.TurnResult, error) {
+			called = true
+			usedModel = model
+			setPhase("レビュー指摘修正")
+			return runner.TurnResult{Text: "fixed"}, nil
+		}},
+		Model: "reviewer-model",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || usedModel != "reviewer-model" || !strings.Contains(result.String(), "fixed") {
+		t.Fatalf("called=%t model=%q result=%q", called, usedModel, result.String())
 	}
 }
 

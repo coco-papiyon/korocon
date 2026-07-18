@@ -19,6 +19,7 @@ type ServerRequestHandler func(context.Context, string, json.RawMessage) (any, e
 
 // SessionConfig controls a resident Codex app-server process.
 type SessionConfig struct {
+	Provider       string
 	Binary         string
 	Model          string
 	WorkingDir     string

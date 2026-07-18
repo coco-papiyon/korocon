@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -18,12 +19,17 @@ import (
 	"github.com/coco-papiyon/korocon/internal/daemon"
 	"github.com/coco-papiyon/korocon/internal/implementation"
 	issueworkflow "github.com/coco-papiyon/korocon/internal/issue"
+	prworkflow "github.com/coco-papiyon/korocon/internal/pullrequest"
 	"github.com/coco-papiyon/korocon/internal/runner"
 )
 
 const version = "0.1.0"
 
 const defaultModel = "gpt-5.6-luna"
+
+var listPullRequests = prworkflow.List
+var loadPullRequest = prworkflow.Load
+var loadIssue = issueworkflow.Load
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
@@ -63,124 +69,306 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 	}
 	fs := flag.NewFlagSet("korocon", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	provider := fs.String("provider", "codex", "AI CLI provider (default: codex)")
+	provider := fs.String("provider", configured.ImplementerProvider, "implementer provider (legacy alias)")
 	binary := fs.String("binary", "", "provider executable (default: codex)")
-	model := fs.String("model", defaultModel, "model: gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.4, or gpt-5.4-mini")
+	model := fs.String("model", configured.ImplementerModel, "implementer model (legacy alias)")
+	implementerProvider := fs.String("implementer-provider", "", "implementer provider: codex or copilot")
+	implementerModel := fs.String("implementer-model", "", "implementer model")
+	verifierProvider := fs.String("verifier-provider", configured.VerifierProvider, "verifier provider: codex or copilot")
+	verifierModel := fs.String("verifier-model", configured.VerifierModel, "verifier model")
+	reviewerProvider := fs.String("reviewer-provider", configured.ReviewerProvider, "reviewer provider: codex or copilot")
+	reviewerModel := fs.String("reviewer-model", configured.ReviewerModel, "reviewer model")
 	dir := fs.String("dir", ".", "working directory")
 	allowAllTools := fs.Bool("allow-all-tools", false, "allow all provider tools")
 	streamLogs := fs.Bool("stream-logs", true, "stream AI stdout/stderr in real time (default: true for testing)")
 	logPath := fs.String("log-file", "korocon.log", "AI stdout/stderr log file (default: korocon.log)")
+	issueNumber := fs.Int("issue", 0, "start the specified issue workflow")
+	prNumber := fs.Int("pr", 0, "start the specified pull request workflow")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	issueSpecified, prSpecified := false, false
+	fs.Visit(func(selected *flag.Flag) {
+		switch selected.Name {
+		case "issue":
+			issueSpecified = true
+		case "pr":
+			prSpecified = true
+		}
+	})
+	if issueSpecified && prSpecified {
+		return errors.New("--issue and --pr cannot be specified together")
+	}
+	implementer, err := resolveAISelection(*provider, *model, aiSelection{Provider: "codex", Model: defaultModel})
+	if err != nil {
+		return fmt.Errorf("implementer AI: %w", err)
+	}
+	if strings.TrimSpace(*implementerProvider) != "" {
+		implementer, err = resolveAISelection(*implementerProvider, valueOrFallback(*implementerModel, implementer.Model), implementer)
+	} else if strings.TrimSpace(*implementerModel) != "" {
+		implementer.Model = strings.TrimSpace(*implementerModel)
+	}
+	if err != nil {
+		return fmt.Errorf("implementer AI: %w", err)
+	}
+	verifier, err := resolveAISelection(*verifierProvider, *verifierModel, implementer)
+	if err != nil {
+		return fmt.Errorf("verifier AI: %w", err)
+	}
+	reviewer, err := resolveAISelection(*reviewerProvider, *reviewerModel, implementer)
+	if err != nil {
+		return fmt.Errorf("reviewer AI: %w", err)
+	}
+	implementer.Binary = strings.TrimSpace(*binary)
+	if verifier.Provider == implementer.Provider {
+		verifier.Binary = implementer.Binary
+	}
+	if reviewer.Provider == implementer.Provider {
+		reviewer.Binary = implementer.Binary
 	}
 	logFile, err := os.OpenFile(*logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("open log file %q: %w", *logPath, err)
 	}
 	defer logFile.Close()
-	binaryName := *binary
-	if binaryName == "" {
-		binaryName = *provider
-	}
-	fmt.Fprintf(stderr, "provider: %s\nmodel: %s\nbinary: %s\nconfig: %s\nworkspace: %s\nbranch: %s\nbase branch: %s\nimplementation directory: %s\nimplementation loops: %d\nauto-approved commands: %d\nlog: %s\n", *provider, *model, binaryName, configPath, configured.WorkspaceName, configured.BranchNamePattern, configured.BaseBranch, configured.ImplementationDirectory, configured.ImplementationLoopCount, len(configured.BuiltinAllowedCommands), *logPath)
+	fmt.Fprintf(stderr, "implementer: %s / %s / %s\nverifier: %s / %s / %s\nreviewer: %s / %s / %s\nconfig: %s\nworkspace: %s\nbranch: %s\nbase branch: %s\nimplementation directory: %s\nimplementation loops: %d\nauto-approved commands: %d\nlog: %s\n", implementer.Provider, implementer.Model, aiBinaryName(implementer), verifier.Provider, verifier.Model, aiBinaryName(verifier), reviewer.Provider, reviewer.Model, aiBinaryName(reviewer), configPath, configured.WorkspaceName, configured.BranchNamePattern, configured.BaseBranch, configured.ImplementationDirectory, configured.ImplementationLoopCount, len(configured.BuiltinAllowedCommands), *logPath)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	startupInput, selectedIssue, err := selectGitHubInformation(ctx, in, stdout, *dir, configured.WorkspaceName)
-	if err != nil {
+	selectionInput := in
+	if _, isFile := in.(*os.File); !isFile {
+		selectionInput = bufio.NewReader(in)
+	}
+	requested := requestedGitHubInformation{issueSpecified: issueSpecified, issueNumber: *issueNumber, prSpecified: prSpecified, prNumber: *prNumber}
+	for {
+		startupInput := selectionInput
+		var selectedIssue *issueworkflow.Workflow
+		var selectedPR *prworkflow.Workflow
+		var err error
+		if requested.issueSpecified || requested.prSpecified {
+			selectedIssue, selectedPR, err = selectRequestedGitHubInformation(ctx, stdout, *dir, configured.WorkspaceName, requested)
+			requested = requestedGitHubInformation{}
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return nil
+				}
+				if _, writeErr := fmt.Fprintf(stdout, "指定された対象を取得できませんでした: %v\n通常の選択へ戻ります。\n", err); writeErr != nil {
+					return writeErr
+				}
+				continue
+			}
+		} else {
+			startupInput, selectedIssue, selectedPR, err = selectGitHubInformation(ctx, selectionInput, stdout, *dir, configured.WorkspaceName)
+		}
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
+			return err
+		}
+		err = func() error {
+			activeAI := implementer
+			if selectedPR != nil {
+				activeAI = reviewer
+			}
+			initialPrompt := ""
+			var initialJob *daemon.JobSpec
+			var review *issueReviewController
+			var implementationEngine *implementation.Engine
+			var prController *prReviewController
+			var fixEngine *prworkflow.FixEngine
+			if selectedIssue != nil {
+				implementationEngine = implementation.New(implementation.Config{
+					Provider: implementer.Provider, Binary: implementer.Binary,
+					VerifierProvider: verifier.Provider, VerifierBinary: verifier.Binary, VerifierModel: verifier.Model,
+					RepositoryDir: *dir, WorkspaceName: configured.WorkspaceName,
+					ImplementationDirectory: configured.ImplementationDirectory,
+					BranchNamePattern:       configured.BranchNamePattern, LoopCount: configured.ImplementationLoopCount,
+					BaseBranch:  configured.BaseBranch,
+					IssueNumber: selectedIssue.Issue.Number, IssueTitle: selectedIssue.Issue.Title,
+					IssueContext: selectedIssue.Context(), LogOut: logFile, LogErr: logFile,
+				})
+				selectedIssue.SetImplementationPublisher(implementationEngine.Publish)
+				defer implementationEngine.Close()
+				implementationJob := func(prompt string) *daemon.JobSpec {
+					return &daemon.JobSpec{
+						Prompt: prompt,
+						Execute: func(ctx context.Context, model string, handler runner.ServerRequestHandler, setPhase func(string), onEvent func()) (runner.TurnResult, error) {
+							return implementationEngine.Run(ctx, prompt, model, handler, setPhase, onEvent)
+						},
+					}
+				}
+				review = newIssueReviewController(selectedIssue, selectedIssue.Phase, stderr, implementationJob, implementationEngine.Close)
+				if selectedIssue.Phase == issueworkflow.PhaseImplementation {
+					initialJob = review.InitialJob()
+				} else {
+					initialPrompt = review.InitialPrompt()
+				}
+			}
+			if selectedPR != nil {
+				fixEngine = prworkflow.NewFixEngine(prworkflow.FixConfig{
+					Provider: implementer.Provider, Binary: implementer.Binary, Model: implementer.Model,
+					RepositoryDir: *dir, ImplementationDirectory: configured.ImplementationDirectory,
+					Number: selectedPR.PR.Number, Title: selectedPR.PR.Title, HeadRefName: selectedPR.PR.HeadRefName,
+					LogOut: logFile, LogErr: logFile,
+				})
+				selectedPR.SetFixPublisher(fixEngine.Publish)
+				defer fixEngine.Close()
+				fixJob := func(prompt string) *daemon.JobSpec {
+					return &daemon.JobSpec{Prompt: prompt, Execute: func(ctx context.Context, model string, handler runner.ServerRequestHandler, setPhase func(string), onEvent func()) (runner.TurnResult, error) {
+						return fixEngine.Run(ctx, prompt, model, handler, setPhase, onEvent)
+					}}
+				}
+				prController = newPRReviewController(selectedPR, stderr, fixJob, fixEngine.Close)
+				initialPrompt = prController.InitialPrompt()
+			}
+			cfg := daemon.Config{
+				Provider: activeAI.Provider, Binary: activeAI.Binary, Model: activeAI.Model,
+				WorkingDir: *dir, AllowAllTools: *allowAllTools, StreamLogs: *streamLogs,
+				LogOut: logFile, LogErr: logFile, StatusOut: stderr, ResultOut: stderr,
+				InitialPrompt:   initialPrompt,
+				InitialJob:      initialJob,
+				AllowedCommands: configured.BuiltinAllowedCommands,
+			}
+			cfg.AddAllowedCommand = func(command string) error {
+				updated, _ := appconfig.AddBuiltinAllowedCommand(configured, command)
+				if err := appconfig.Save(configPath, updated); err != nil {
+					return err
+				}
+				configured = updated
+				return nil
+			}
+			cfg.BeforeJob = func(ctx context.Context, _ uint64, _ string) error {
+				return issueworkflow.SyncRepository(ctx, *dir)
+			}
+			if review != nil {
+				cfg.OnJobStart = review.OnJobStart
+				cfg.OnJobFinish = review.OnJobFinish
+				cfg.HandleInput = review.HandleInput
+			}
+			if prController != nil {
+				cfg.OnJobStart = prController.OnJobStart
+				cfg.OnJobFinish = prController.OnJobFinish
+				cfg.HandleInput = prController.HandleInput
+			}
+			return daemon.Run(ctx, startupInput, stdout, cfg)
+		}()
+		if errors.Is(err, daemon.ErrRestart) {
+			selectionInput = startupInput
+			continue
+		}
 		if errors.Is(err, context.Canceled) {
 			return nil
 		}
 		return err
 	}
-	initialPrompt := ""
-	var initialJob *daemon.JobSpec
-	var review *issueReviewController
-	var implementationEngine *implementation.Engine
-	if selectedIssue != nil {
-		implementationEngine = implementation.New(implementation.Config{
-			Binary: *binary, RepositoryDir: *dir, WorkspaceName: configured.WorkspaceName,
-			ImplementationDirectory: configured.ImplementationDirectory,
-			BranchNamePattern:       configured.BranchNamePattern, LoopCount: configured.ImplementationLoopCount,
-			BaseBranch:  configured.BaseBranch,
-			IssueNumber: selectedIssue.Issue.Number, IssueTitle: selectedIssue.Issue.Title,
-			IssueContext: selectedIssue.Context(), LogOut: logFile, LogErr: logFile,
-		})
-		selectedIssue.SetImplementationPublisher(implementationEngine.Publish)
-		defer implementationEngine.Close()
-		implementationJob := func(prompt string) *daemon.JobSpec {
-			return &daemon.JobSpec{
-				Prompt: prompt,
-				Execute: func(ctx context.Context, model string, handler runner.ServerRequestHandler, setPhase func(string), onEvent func()) (runner.TurnResult, error) {
-					return implementationEngine.Run(ctx, prompt, model, handler, setPhase, onEvent)
-				},
-			}
+}
+
+type requestedGitHubInformation struct {
+	issueSpecified bool
+	issueNumber    int
+	prSpecified    bool
+	prNumber       int
+}
+
+type aiSelection struct {
+	Provider string
+	Model    string
+	Binary   string
+}
+
+func resolveAISelection(provider, model string, fallback aiSelection) (aiSelection, error) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" {
+		provider = fallback.Provider
+	}
+	switch provider {
+	case "codex":
+	case "copilot", "github_copilot", "github-copilot":
+		provider = "copilot"
+	default:
+		return aiSelection{}, fmt.Errorf("unsupported provider %q", provider)
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		model = fallback.Model
+	}
+	return aiSelection{Provider: provider, Model: model}, nil
+}
+
+func valueOrFallback(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+func aiBinaryName(selection aiSelection) string {
+	if strings.TrimSpace(selection.Binary) != "" {
+		return selection.Binary
+	}
+	return selection.Provider
+}
+
+func selectRequestedGitHubInformation(ctx context.Context, out io.Writer, workingDir, workspaceName string, requested requestedGitHubInformation) (*issueworkflow.Workflow, *prworkflow.Workflow, error) {
+	if requested.issueSpecified {
+		selected, err := loadIssue(ctx, workingDir, requested.issueNumber, workspaceName)
+		if err != nil {
+			return nil, nil, fmt.Errorf("Issue #%dの取得に失敗しました: %w", requested.issueNumber, err)
 		}
-		review = newIssueReviewController(selectedIssue, selectedIssue.Phase, stderr, implementationJob, implementationEngine.Close)
-		if selectedIssue.Phase == issueworkflow.PhaseImplementation {
-			initialJob = review.InitialJob()
-		} else {
-			initialPrompt = review.InitialPrompt()
+		phaseName := "設計"
+		if selected.Phase == issueworkflow.PhaseImplementation {
+			phaseName = "実装"
 		}
-	}
-	cfg := daemon.Config{
-		Provider: *provider, Binary: *binary, Model: *model,
-		WorkingDir: *dir, AllowAllTools: *allowAllTools, StreamLogs: *streamLogs,
-		LogOut: logFile, LogErr: logFile, StatusOut: stderr, ResultOut: stderr,
-		InitialPrompt:   initialPrompt,
-		InitialJob:      initialJob,
-		AllowedCommands: configured.BuiltinAllowedCommands,
-	}
-	cfg.AddAllowedCommand = func(command string) error {
-		updated, _ := appconfig.AddBuiltinAllowedCommand(configured, command)
-		if err := appconfig.Save(configPath, updated); err != nil {
-			return err
+		if _, err := fmt.Fprintf(out, "\n%s\n\n実行工程: %s\n", selected.Context(), phaseName); err != nil {
+			return nil, nil, err
 		}
-		configured = updated
-		return nil
+		return selected, nil, nil
 	}
-	cfg.BeforeJob = func(ctx context.Context, _ uint64, _ string) error {
-		return issueworkflow.SyncRepository(ctx, *dir)
+	if requested.prSpecified {
+		selected, err := loadPullRequest(ctx, workingDir, requested.prNumber, workspaceName)
+		if err != nil {
+			return nil, nil, fmt.Errorf("PR #%dの取得に失敗しました: %w", requested.prNumber, err)
+		}
+		if _, err := fmt.Fprintf(out, "\n%s\n\n実行工程: レビュー\n", selected.Context()); err != nil {
+			return nil, nil, err
+		}
+		return nil, selected, nil
 	}
-	if review != nil {
-		cfg.OnJobStart = review.OnJobStart
-		cfg.OnJobFinish = review.OnJobFinish
-		cfg.HandleInput = review.HandleInput
-	}
-	err = daemon.Run(ctx, startupInput, stdout, cfg)
-	if errors.Is(err, context.Canceled) {
-		return nil
-	}
-	return err
+	return nil, nil, errors.New("IssueまたはPRが指定されていません")
 }
 
 // selectGitHubInformation performs the small piece of setup that is needed
 // before the resident AI process starts. Keeping this outside daemon.Run is
 // important: the choice and issue number must not be sent as AI prompts.
-func selectGitHubInformation(ctx context.Context, in io.Reader, out io.Writer, workingDir, workspaceName string) (io.Reader, *issueworkflow.Workflow, error) {
-	reader := bufio.NewReader(in)
+func selectGitHubInformation(ctx context.Context, in io.Reader, out io.Writer, workingDir, workspaceName string) (io.Reader, *issueworkflow.Workflow, *prworkflow.Workflow, error) {
+	reader, ok := in.(*bufio.Reader)
+	if !ok {
+		reader = bufio.NewReader(in)
+	}
 	for {
 		if _, err := fmt.Fprint(out, "取得する情報を選択してください (issue/pr): "); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		choice, err := readStringContext(ctx, reader)
 		if err != nil && len(choice) == 0 {
-			return nil, nil, fmt.Errorf("GitHub情報の選択を読み取れません: %w", err)
+			return nil, nil, nil, fmt.Errorf("GitHub情報の選択を読み取れません: %w", err)
 		}
 		switch strings.ToLower(strings.TrimSpace(choice)) {
 		case "1", "issue", "i":
 			selected, err := selectIssue(ctx, reader, out, workingDir, workspaceName)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
-			return remainingInput(in, reader), selected, nil
+			return remainingInput(in, reader), selected, nil, nil
 		case "2", "pr", "p":
-			if err := showPullRequests(ctx, out, workingDir); err != nil {
-				return nil, nil, err
+			selected, err := selectPullRequest(ctx, reader, out, workingDir, workspaceName)
+			if err != nil {
+				return nil, nil, nil, err
 			}
-			return remainingInput(in, reader), nil, nil
+			return remainingInput(in, reader), nil, selected, nil
 		default:
 			if _, writeErr := fmt.Fprintln(out, "issue または pr を入力してください。"); writeErr != nil {
-				return nil, nil, writeErr
+				return nil, nil, nil, writeErr
 			}
 		}
 	}
@@ -206,7 +394,7 @@ func selectIssue(ctx context.Context, reader *bufio.Reader, out io.Writer, worki
 	if err != nil || number < 1 {
 		return nil, fmt.Errorf("issue番号が不正です: %q", numberText)
 	}
-	selected, err := issueworkflow.Load(ctx, workingDir, number, workspaceName)
+	selected, err := loadIssue(ctx, workingDir, number, workspaceName)
 	if err != nil {
 		return nil, fmt.Errorf("issue #%dの取得に失敗しました: %w", number, err)
 	}
@@ -241,8 +429,50 @@ func readStringContext(ctx context.Context, reader *bufio.Reader) (string, error
 	}
 }
 
-func showPullRequests(ctx context.Context, out io.Writer, workingDir string) error {
-	return showGitHubCommand(ctx, out, workingDir, "pr", "list")
+func selectPullRequest(ctx context.Context, reader *bufio.Reader, out io.Writer, workingDir, workspaceName string) (*prworkflow.Workflow, error) {
+	prs, err := listPullRequests(ctx, workingDir)
+	if err != nil {
+		return nil, fmt.Errorf("PR一覧の取得に失敗しました: %w", err)
+	}
+	if len(prs) == 0 {
+		return nil, errors.New("PRがありません")
+	}
+	sort.Slice(prs, func(i, j int) bool { return prs[i].Number > prs[j].Number })
+	if _, err := fmt.Fprintln(out, "\nPR一覧:"); err != nil {
+		return nil, err
+	}
+	for _, pr := range prs {
+		status := strings.ToUpper(strings.TrimSpace(pr.State))
+		if pr.IsDraft {
+			status += "/DRAFT"
+		}
+		review := strings.ToUpper(strings.TrimSpace(pr.ReviewDecision))
+		if review == "" {
+			review = "REVIEWなし"
+		}
+		if _, err := fmt.Fprintf(out, "#%d [%s] [%s] %s (%s -> %s)\n", pr.Number, status, review, pr.Title, pr.HeadRefName, pr.BaseRefName); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := fmt.Fprint(out, "\nPR番号を入力してください: "); err != nil {
+		return nil, err
+	}
+	numberText, err := readStringContext(ctx, reader)
+	if err != nil && len(numberText) == 0 {
+		return nil, fmt.Errorf("PR番号を読み取れません: %w", err)
+	}
+	number, err := strconv.Atoi(strings.TrimSpace(numberText))
+	if err != nil || number < 1 {
+		return nil, fmt.Errorf("PR番号が不正です: %q", strings.TrimSpace(numberText))
+	}
+	selected, err := loadPullRequest(ctx, workingDir, number, workspaceName)
+	if err != nil {
+		return nil, fmt.Errorf("PR #%dの取得に失敗しました: %w", number, err)
+	}
+	if _, err := fmt.Fprintf(out, "\n%s\n\n実行工程: レビュー\n", selected.Context()); err != nil {
+		return nil, err
+	}
+	return selected, nil
 }
 
 func showGitHubCommand(ctx context.Context, out io.Writer, workingDir string, args ...string) error {
@@ -319,13 +549,21 @@ Usage:
   korocon version
 
 Run options:
-  --provider NAME       provider name (default: codex)
+  --provider NAME       implementer provider (legacy alias)
   --binary PATH         executable (default: codex)
-  --model NAME          gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.4, or gpt-5.4-mini
+  --model NAME          implementer model (legacy alias)
+  --implementer-provider NAME  implementer provider
+  --implementer-model NAME     implementer model
+  --verifier-provider NAME     verifier provider (default: implementer)
+  --verifier-model NAME        verifier model (default: implementer)
+  --reviewer-provider NAME     reviewer provider (default: implementer)
+  --reviewer-model NAME        reviewer model (default: implementer)
   --dir PATH            provider working directory (default: .)
   --allow-all-tools     grant all provider tools
   --stream-logs         stream AI stdout/stderr in real time (currently on)
   --log-file PATH       AI stdout/stderr log file (default: korocon.log)
+  --issue NUMBER        start the specified issue workflow
+  --pr NUMBER           start the specified pull request workflow
 
 Interactive mode:
   Start one resident Codex process, send prompts through its stdin,

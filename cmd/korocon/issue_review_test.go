@@ -95,7 +95,7 @@ func TestIssueReviewImplementationApprovalClosesSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !action.Handled || closed != 1 {
+	if !action.Handled || !action.Restart || closed != 1 {
 		t.Fatalf("action=%+v closed=%d", action, closed)
 	}
 	if !strings.Contains(out.String(), "PRを作成しました: https://github.com/acme/repo/pull/1") {
@@ -125,7 +125,7 @@ func TestIssueReviewImplementationApprovalFailureKeepsSessionsAndPendingState(t 
 	workflow.approveErr = nil
 	workflow.approvedURL = "https://github.com/acme/repo/pull/2"
 	action, err := controller.HandleInput(context.Background(), "approve")
-	if err != nil || !action.Handled || closed != 1 {
+	if err != nil || !action.Handled || !action.Restart || closed != 1 {
 		t.Fatalf("retry action=%+v err=%v closed=%d", action, err, closed)
 	}
 }
