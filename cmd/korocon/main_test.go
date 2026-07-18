@@ -407,8 +407,44 @@ func TestWaitForAutoPollingWaitsAndDisplaysNextFetch(t *testing.T) {
 	if err := waitForAutoPolling(context.Background(), &out, "5m", time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "フィルタに一致する自動処理対象がありません。5m後に再取得します。") {
+	if !strings.Contains(out.String(), "フィルタに一致する自動処理対象がありません。Enterで再取得、5m後に再取得します。") {
 		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestWaitForAutoPollingRestartsOnEnter(t *testing.T) {
+	var out strings.Builder
+	started := time.Now()
+	if err := waitForAutoPolling(context.Background(), &out, "5m", time.Hour, strings.NewReader("\n")); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("wait elapsed = %s", elapsed)
+	}
+}
+
+func TestWaitForAutoPollingIgnoresNonEmptyInput(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+	if err := waitForAutoPolling(ctx, io.Discard, "5m", time.Hour, strings.NewReader("not enter\n")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestWaitForAutoPollingDiscardsInputAfterWait(t *testing.T) {
+	input := newAutoPollingInput(strings.NewReader("entered while waiting\n"))
+	if err := waitForAutoPolling(context.Background(), io.Discard, "5m", 10*time.Millisecond, input); err != nil {
+		t.Fatal(err)
+	}
+
+	input.mu.Lock()
+	defer input.mu.Unlock()
+	if len(input.waitLines) != 0 || len(input.normalLines) != 0 {
+		t.Fatalf("input queues after wait = wait:%d normal:%d", len(input.waitLines), len(input.normalLines))
 	}
 }
 
