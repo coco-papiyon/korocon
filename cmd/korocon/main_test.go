@@ -526,12 +526,54 @@ func TestRunInteractiveDisplaysRoleAISelectionsFromFlags(t *testing.T) {
 		t.Fatal("expected EOF after fallback selection")
 	}
 	for _, want := range []string{
-		"implementer: copilot / implementer-model",
-		"verifier: codex / verifier-model",
-		"reviewer: copilot / reviewer-model",
+		"  implementer     : copilot / implementer-model / copilot",
+		"  verifier        : codex / verifier-model / codex",
+		"  reviewer        : copilot / reviewer-model / copilot",
 	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("stderr = %q, want %q", stderr.String(), want)
 		}
+	}
+}
+
+func TestWriteStartupSummaryGroupsAndAlignsFields(t *testing.T) {
+	var out strings.Builder
+	implementer := aiSelection{Provider: "codex", Model: "implementer", Binary: "codex"}
+	verifier := aiSelection{Provider: "copilot", Model: "verifier", Binary: "copilot"}
+	reviewer := aiSelection{Provider: "codex", Model: "reviewer", Binary: "codex"}
+	if err := writeStartupSummary(&out, implementer, verifier, reviewer, "未設定", "issue_#13", "main", "未設定"); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"AI:\n", "GitHub:\n", "Workflow:\n", "github reviewer", "branch", "base branch", "startup command", "未設定"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("summary = %q, want %q", got, want)
+		}
+	}
+	colonColumn := -1
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "  ") {
+			column := strings.Index(line, ":")
+			if colonColumn == -1 {
+				colonColumn = column
+			} else if column != colonColumn {
+				t.Fatalf("colon column = %d in %q, want %d", column, line, colonColumn)
+			}
+		}
+	}
+}
+
+func TestWriteStartupSummaryOmitsAISelectionsMatchingImplementer(t *testing.T) {
+	var out strings.Builder
+	implementer := aiSelection{Provider: "codex", Model: "same", Binary: "codex"}
+	if err := writeStartupSummary(&out, implementer, implementer, implementer, "reviewer", "branch", "main", "command"); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if strings.Contains(got, "\n  verifier") || strings.Contains(got, "\n  reviewer") {
+		t.Fatalf("summary = %q, duplicate AI roles should be omitted", got)
+	}
+	if !strings.Contains(got, "implementer") || !strings.Contains(got, "github reviewer") {
+		t.Fatalf("summary = %q, required fields are missing", got)
 	}
 }

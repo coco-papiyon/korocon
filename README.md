@@ -127,7 +127,21 @@ Issue #2の実装を開始します。
 
 実装・検証ループでは各AIターンの応答直後に回数付きファイルを保存します。回数なしの実装ファイルは、検証合格後に承認対象として保存する最終成果物です。
 
-起動時に、入力欄の上へ実装者・検証者・レビューアそれぞれのProviderとModel、設定ファイル、workspace名、ログファイルが表示されます。
+起動時に、入力欄の上へ主要設定をAI・GitHub・Workflowのグループに分けて表示します。実装者と同じ設定の検証者・レビューアは省略されます。詳細設定は`config.json`で確認できます。
+
+```text
+AI:
+  implementer     : codex / gpt-5.6-luna / codex
+  verifier        : copilot / claude-sonnet / copilot
+
+GitHub:
+  github reviewer : 未設定
+
+Workflow:
+  branch          : issue_#<issue番号>
+  base branch     : main
+  startup command : 未設定
+```
 
 端末入力では`Shift+Enter`で改行、`Enter`で送信します。左右・上下矢印で入力中のカーソルを移動できます。
 Ctrl+Cまたは`exit`の入力で、実行中のAIを停止してCLIを終了します。
