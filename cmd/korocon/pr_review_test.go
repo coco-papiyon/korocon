@@ -125,7 +125,7 @@ func TestPRReviewRerunAndFixInstruction(t *testing.T) {
 	}
 }
 
-func TestPRReviewFindingsAutomaticallyReturnToSelection(t *testing.T) {
+func TestPRReviewFindingsWaitForApproval(t *testing.T) {
 	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
 	var out bytes.Buffer
 	controller := newPRReviewController(workflow, &out, nil, nil, nil, nil, nil)
@@ -134,11 +134,45 @@ func TestPRReviewFindingsAutomaticallyReturnToSelection(t *testing.T) {
 	}
 	result := "## 結果\n\n要修正\n\n## 指摘事項\n- 修正してください"
 	err := controller.OnJobFinish(context.Background(), 1, workflow.Prompt(), result, nil)
-	if !errors.Is(err, daemon.ErrRestart) {
-		t.Fatalf("error = %v, want ErrRestart", err)
+	if err != nil {
+		t.Fatalf("error = %v, want nil", err)
 	}
-	if !strings.Contains(workflow.changes, "修正してください") || !strings.Contains(out.String(), "Issue/PR選択へ戻ります") {
+	if workflow.changes != "" || !strings.Contains(out.String(), "レビューで指摘が見つかりました") {
 		t.Fatalf("workflow=%+v output=%q", workflow, out.String())
+	}
+	action, err := controller.HandleInput(context.Background(), "修正してください")
+	if err != nil || !action.Handled || !action.Restart || !strings.Contains(workflow.changes, "修正してください") {
+		t.Fatalf("action=%+v workflow=%+v err=%v", action, workflow, err)
+	}
+}
+
+func TestPRReviewFindingsCanBeApproved(t *testing.T) {
+	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
+	controller := newPRReviewController(workflow, &bytes.Buffer{}, nil, nil, nil, nil, nil)
+	result := "## 結果\n\nコメントあり\n\n## 指摘事項\n- 確認してください"
+	completePRJob(t, controller, workflow.Prompt(), result)
+	action, err := controller.HandleInput(context.Background(), "approve")
+	if err != nil || !action.Handled || !action.Restart || workflow.approved != result {
+		t.Fatalf("action=%+v workflow=%+v err=%v", action, workflow, err)
+	}
+}
+
+func TestPRReviewApprovedPRWaitsForInput(t *testing.T) {
+	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReviewApproved}
+	controller := newPRReviewController(workflow, &bytes.Buffer{}, nil, nil, nil, nil, nil)
+	if prompt := controller.InitialPrompt(); prompt != "" {
+		t.Fatalf("initial prompt = %q, want empty", prompt)
+	}
+	action, err := controller.HandleInput(context.Background(), "")
+	if err != nil || !action.Handled || !action.Restart {
+		t.Fatalf("enter action=%+v err=%v", action, err)
+	}
+
+	workflow = &fakePRWorkflow{phase: prworkflow.PhaseReviewApproved}
+	controller = newPRReviewController(workflow, &bytes.Buffer{}, nil, nil, nil, nil, nil)
+	action, err = controller.HandleInput(context.Background(), "確認内容")
+	if err != nil || !action.Handled || action.Prompt == "" || workflow.phase != prworkflow.PhaseReview || !strings.Contains(action.Prompt, "確認内容") {
+		t.Fatalf("rerun action=%+v phase=%q err=%v", action, workflow.phase, err)
 	}
 }
 

@@ -54,6 +54,9 @@ func newPRReviewController(workflow prWorkflow, out io.Writer, fixJob, conflictJ
 func (c *prReviewController) InitialPrompt() string { return c.initialPrompt() }
 
 func (c *prReviewController) initialPrompt() string {
+	if c.workflow.CurrentPhase() == prworkflow.PhaseReviewApproved {
+		return ""
+	}
 	if c.workflow.CurrentPhase() == prworkflow.PhaseConflict {
 		return c.workflow.ConflictPrompt("")
 	}
@@ -118,14 +121,6 @@ func (c *prReviewController) OnJobFinish(ctx context.Context, id uint64, _ strin
 	if runErr != nil {
 		return nil
 	}
-	if c.workflow.CurrentPhase() == prworkflow.PhaseReview && reviewRequiresChanges(result) {
-		instruction := "レビュー結果に記載された指摘事項を修正してください。"
-		if err := c.workflow.RequestChanges(ctx, result, instruction); err != nil {
-			return err
-		}
-		_, err := fmt.Fprintln(c.out, "レビューで指摘が見つかりました。レビュー結果をPRへ登録し、Issue/PR選択へ戻ります。")
-		return errors.Join(err, daemon.ErrRestart)
-	}
 	c.mu.Lock()
 	c.pending, c.result = true, result
 	phase := "レビュー"
@@ -136,9 +131,17 @@ func (c *prReviewController) OnJobFinish(ctx context.Context, id uint64, _ strin
 	}
 	_, err := fmt.Fprintf(c.out, "\n\n---\n\n%s結果を保存しました: %s\n%sが完了しました。承認する場合は未入力状態でEnter、もしくは承認、approve、aのいずれかを入力してください。\n", phase, artifact, phase)
 	if c.workflow.CurrentPhase() == prworkflow.PhaseReview {
-		_, err = fmt.Fprintln(c.out, "再実行する場合は /rerun または /rerun 補足、修正する場合はレビュー修正指示を入力してください。")
+		var noticeErr error
+		if reviewRequiresChanges(result) {
+			_, noticeErr = fmt.Fprintln(c.out, "レビューで指摘が見つかりました。レビュー結果を確認してください。承認する場合は未入力状態でEnter、もしくは承認、approve、aを入力してください。指摘を修正する場合は内容を入力してEnter、/rerunでレビューを再実行できます。")
+		} else {
+			_, noticeErr = fmt.Fprintln(c.out, "再実行する場合は /rerun または /rerun 補足、修正する場合はレビュー修正指示を入力してください。")
+		}
+		err = errors.Join(err, noticeErr)
 	} else {
-		_, err = fmt.Fprintln(c.out, "再実行または追加修正する場合は内容を入力してください。")
+		var noticeErr error
+		_, noticeErr = fmt.Fprintln(c.out, "再実行または追加修正する場合は内容を入力してください。")
+		err = errors.Join(err, noticeErr)
 	}
 	c.mu.Unlock()
 	return err
@@ -189,6 +192,14 @@ func (c *prReviewController) HandleInput(ctx context.Context, input string) (dae
 			err = errors.Join(err, c.closeFix())
 		}
 		return daemon.InputAction{Handled: true, Restart: true}, err
+	}
+	if c.workflow.CurrentPhase() == prworkflow.PhaseReviewApproved {
+		if isApprovalInput(input) {
+			_, err := fmt.Fprintln(c.out, "レビュー承認済みのPR処理を終了し、Issue/PR選択へ戻ります。")
+			return daemon.InputAction{Handled: true, Restart: true}, err
+		}
+		c.workflow.SetPhase(prworkflow.PhaseReview)
+		return c.enqueue(c.workflow.RevisionPrompt(strings.TrimSpace(input)), false, "レビュー承認済みPRのレビューを再実行します。")
 	}
 	if !pending {
 		return daemon.InputAction{}, nil

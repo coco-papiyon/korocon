@@ -114,6 +114,81 @@ func TestPullRequestStatusUsesJapaneseStateLabel(t *testing.T) {
 	}
 }
 
+func TestRoleSelectionTargets(t *testing.T) {
+	implementerPR := prworkflow.PullRequest{Labels: []prworkflow.Label{{Name: "state:pr_review_comment"}}}
+	reviewerPR := prworkflow.PullRequest{Labels: []prworkflow.Label{{Name: "state:pr_created"}}}
+	approvedPR := prworkflow.PullRequest{Labels: []prworkflow.Label{{Name: "state:review_approved"}}}
+	if !pullRequestIsRoleTarget(implementerPR, selectionModeImplementer) || pullRequestIsRoleTarget(implementerPR, selectionModeReviewer) {
+		t.Fatalf("implementer PR role selection is incorrect")
+	}
+	if !pullRequestIsRoleTarget(reviewerPR, selectionModeReviewer) || pullRequestIsRoleTarget(reviewerPR, selectionModeImplementer) {
+		t.Fatalf("reviewer PR role selection is incorrect")
+	}
+	if pullRequestIsRoleTarget(approvedPR, selectionModeReviewer) {
+		t.Fatalf("approved PR was selected for reviewer mode")
+	}
+	if issueIsImplementerTarget(issueworkflow.Issue{Labels: []issueworkflow.Label{{Name: "state:implementation_ready"}}}) {
+		t.Fatalf("issue approval state was selected for implementer mode")
+	}
+	if !issueIsImplementerTarget(issueworkflow.Issue{Labels: []issueworkflow.Label{{Name: "state:design_approved"}}}) {
+		t.Fatalf("design-approved issue was not selected for implementer mode")
+	}
+}
+
+func TestGitHubSelectionFilters(t *testing.T) {
+	filters := githubSelectionFilters{
+		LabelIncludes: []string{"bug", "backend"},
+		LabelExcludes: []string{"blocked"},
+		TitleContains: []string{"API", "CLI"},
+		Authors:       []string{"alice"},
+		ProjectItems: &projectMembership{
+			issueNumbers: map[int]struct{}{12: {}},
+			prNumbers:    map[int]struct{}{34: {}},
+			urls:         map[string]struct{}{},
+		},
+	}
+	issue := issueworkflow.Issue{
+		Number: 12, Title: "Improve API", Author: issueworkflow.User{Login: "Alice"},
+		Labels: []issueworkflow.Label{{Name: "bug"}, {Name: "backend"}},
+	}
+	if !matchesIssueFilters(issue, filters) {
+		t.Fatal("matching issue was excluded")
+	}
+	issue.Labels = append(issue.Labels, issueworkflow.Label{Name: "blocked"})
+	if matchesIssueFilters(issue, filters) {
+		t.Fatal("excluded label was ignored")
+	}
+	pr := prworkflow.PullRequest{
+		Number: 34, Title: "CLI update", Author: prworkflow.User{Login: "alice"},
+		Labels: []prworkflow.Label{{Name: "bug"}, {Name: "backend"}},
+	}
+	if !matchesPullRequestFilters(pr, filters) {
+		t.Fatal("matching pull request was excluded")
+	}
+	pr.Number = 35
+	if matchesPullRequestFilters(pr, filters) {
+		t.Fatal("pull request outside the project was included")
+	}
+}
+
+func TestBuildProjectQuery(t *testing.T) {
+	tests := []struct {
+		status string
+		query  string
+		want   string
+	}{
+		{status: "In Progress", want: `status:"In Progress"`},
+		{status: "Ready", query: "priority:P1", want: `status:"Ready" priority:P1`},
+		{query: "priority:P2", want: "priority:P2"},
+		{status: `Needs "Review"`, want: `status:"Needs \"Review\""`},
+	}
+	for _, test := range tests {
+		if got := buildProjectQuery(test.status, test.query); got != test.want {
+			t.Fatalf("buildProjectQuery(%q, %q) = %q, want %q", test.status, test.query, got, test.want)
+		}
+	}
+}
+
 func TestSelectRequestedGitHubInformationLoadsIssue(t *testing.T) {
 	original := loadIssue
 	t.Cleanup(func() { loadIssue = original })
@@ -165,9 +240,26 @@ func TestRunInteractiveRejectsIssueAndPRTogether(t *testing.T) {
 	}
 }
 
+func TestRunInteractiveRejectsShortRoleModesTogether(t *testing.T) {
+	err := runInteractive([]string{"-i", "-r"}, strings.NewReader(""), io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "cannot be specified together") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestUsageIncludesShortRoleModes(t *testing.T) {
+	var out strings.Builder
+	printUsage(&out)
+	if !strings.Contains(out.String(), "-i") || !strings.Contains(out.String(), "-r") {
+		t.Fatalf("usage = %q", out.String())
+	}
+}
+
 func TestRunInteractiveFallsBackToInitialSelectionWhenRequestedIssueIsMissing(t *testing.T) {
 	original := loadIssue
-	t.Cleanup(func() { loadIssue = original })
+	originalUser := currentGitHubUser
+	t.Cleanup(func() { loadIssue = original; currentGitHubUser = originalUser })
+	currentGitHubUser = func(context.Context, string) (string, error) { return "test-user", nil }
 	loadIssue = func(context.Context, string, int, string) (*issueworkflow.Workflow, error) {
 		return nil, errors.New("not found")
 	}
@@ -227,7 +319,9 @@ func TestPullRequestAIUsesSeparateRoleByPhase(t *testing.T) {
 
 func TestRunInteractiveDisplaysRoleAISelectionsFromFlags(t *testing.T) {
 	original := loadIssue
-	t.Cleanup(func() { loadIssue = original })
+	originalUser := currentGitHubUser
+	t.Cleanup(func() { loadIssue = original; currentGitHubUser = originalUser })
+	currentGitHubUser = func(context.Context, string) (string, error) { return "test-user", nil }
 	loadIssue = func(context.Context, string, int, string) (*issueworkflow.Workflow, error) {
 		return nil, errors.New("not found")
 	}

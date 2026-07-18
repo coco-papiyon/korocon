@@ -15,10 +15,11 @@ import (
 type Phase string
 
 const (
-	PhaseReview       Phase = "review"
-	PhaseFix          Phase = "review_fix_implementation"
-	PhaseConflict     Phase = "pr_conflict"
-	PhaseVerification Phase = "verification"
+	PhaseReview         Phase = "review"
+	PhaseReviewApproved Phase = "review_approved"
+	PhaseFix            Phase = "review_fix_implementation"
+	PhaseConflict       Phase = "pr_conflict"
+	PhaseVerification   Phase = "verification"
 )
 
 var stateLabels = map[string]struct{}{
@@ -71,6 +72,7 @@ type PullRequest struct {
 	BaseRefName      string    `json:"baseRefName"`
 	URL              string    `json:"url"`
 	Author           User      `json:"author"`
+	Assignees        []User    `json:"assignees"`
 	Labels           []Label   `json:"labels"`
 	Comments         []Comment `json:"comments"`
 	Reviews          []Review  `json:"reviews"`
@@ -104,7 +106,15 @@ type Workflow struct {
 }
 
 func List(ctx context.Context, workingDir string) ([]PullRequest, error) {
-	raw, err := ghCommandRunner{}.Run(ctx, workingDir, "pr", "list", "--state", "all", "--limit", "100", "--json", "number,title,state,isDraft,reviewDecision,mergeable,mergeStateStatus,headRefName,baseRefName,url,labels")
+	return ListWithSearch(ctx, workingDir, "")
+}
+
+func ListWithSearch(ctx context.Context, workingDir, search string) ([]PullRequest, error) {
+	args := []string{"pr", "list", "--state", "all", "--limit", "100", "--json", "number,title,state,isDraft,reviewDecision,mergeable,mergeStateStatus,headRefName,baseRefName,url,labels,assignees,author"}
+	if strings.TrimSpace(search) != "" {
+		args = append(args, "--search", strings.TrimSpace(search))
+	}
+	raw, err := ghCommandRunner{}.Run(ctx, workingDir, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +133,7 @@ func load(ctx context.Context, workingDir string, number int, workspaceName stri
 	if number < 1 {
 		return nil, errors.New("pull request number must be greater than zero")
 	}
-	raw, err := runner.Run(ctx, workingDir, "pr", "view", strconv.Itoa(number), "--json", "number,title,body,state,isDraft,reviewDecision,mergeable,mergeStateStatus,headRefName,baseRefName,url,author,labels,comments,reviews,files")
+	raw, err := runner.Run(ctx, workingDir, "pr", "view", strconv.Itoa(number), "--json", "number,title,body,state,isDraft,reviewDecision,mergeable,mergeStateStatus,headRefName,baseRefName,url,author,labels,assignees,comments,reviews,files")
 	if err != nil {
 		return nil, err
 	}
@@ -147,6 +157,9 @@ func (w *Workflow) SetConflictPublisher(publisher func(context.Context, string) 
 }
 
 func (w *Workflow) Prompt() string {
+	if w.Phase == PhaseReviewApproved {
+		return ""
+	}
 	if w.Phase == PhaseConflict {
 		return w.ConflictPrompt("")
 	}
@@ -322,8 +335,17 @@ func HasConflict(pr PullRequest) bool {
 		strings.EqualFold(strings.TrimSpace(pr.MergeStateStatus), "DIRTY")
 }
 
+func PullRequestHasLabel(pr PullRequest, target string) bool {
+	for _, label := range pr.Labels {
+		if strings.EqualFold(strings.TrimSpace(label.Name), target) {
+			return true
+		}
+	}
+	return false
+}
+
 func pullRequestPhase(pr PullRequest) Phase {
-	if HasConflict(pr) {
+	if HasConflict(pr) || PullRequestHasLabel(pr, "state:pr_conflict") {
 		return PhaseConflict
 	}
 	fixLabels := map[string]struct{}{
@@ -338,6 +360,11 @@ func pullRequestPhase(pr PullRequest) Phase {
 	for _, label := range pr.Labels {
 		if _, ok := fixLabels[strings.ToLower(strings.TrimSpace(label.Name))]; ok {
 			return PhaseFix
+		}
+	}
+	for _, label := range pr.Labels {
+		if strings.EqualFold(strings.TrimSpace(label.Name), "state:review_approved") {
+			return PhaseReviewApproved
 		}
 	}
 	return PhaseReview

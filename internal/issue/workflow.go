@@ -110,6 +110,26 @@ func Load(ctx context.Context, workingDir string, number int, workspaceName stri
 	return load(ctx, workingDir, number, workspaceName, ghCommandRunner{})
 }
 
+func List(ctx context.Context, workingDir string) ([]Issue, error) {
+	return ListWithSearch(ctx, workingDir, "")
+}
+
+func ListWithSearch(ctx context.Context, workingDir, search string) ([]Issue, error) {
+	args := []string{"issue", "list", "--state", "open", "--limit", "100", "--json", "number,title,body,labels,comments,url,author,assignees"}
+	if strings.TrimSpace(search) != "" {
+		args = append(args, "--search", strings.TrimSpace(search))
+	}
+	raw, err := ghCommandRunner{}.Run(ctx, workingDir, args...)
+	if err != nil {
+		return nil, err
+	}
+	var issues []Issue
+	if err := json.Unmarshal(raw, &issues); err != nil {
+		return nil, fmt.Errorf("decode issue list: %w", err)
+	}
+	return issues, nil
+}
+
 func load(ctx context.Context, workingDir string, number int, workspaceName string, runner commandRunner) (*Workflow, error) {
 	if number < 1 {
 		return nil, errors.New("issue number must be greater than zero")

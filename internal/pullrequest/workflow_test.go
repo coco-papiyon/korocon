@@ -193,3 +193,10 @@ func TestPullRequestPhasePrioritizesConflictOverReviewFix(t *testing.T) {
 		t.Fatalf("phase = %q", phase)
 	}
 }
+
+func TestPullRequestPhaseDetectsReviewApproved(t *testing.T) {
+	pr := PullRequest{Labels: []Label{{Name: "state:review_approved"}}}
+	if phase := pullRequestPhase(pr); phase != PhaseReviewApproved {
+		t.Fatalf("phase = %q", phase)
+	}
+}
