@@ -109,6 +109,10 @@ func TestPRFixRunsAsSeparateJobAndReturnsToSelectionAfterApproval(t *testing.T) 
 	if err != nil || !action.Restart || action.Prompt != "" || workflow.fixApproved != "fixed result" || workflow.phase != prworkflow.PhaseFix || closed != 1 {
 		t.Fatalf("action=%+v workflow=%+v closed=%d err=%v", action, workflow, closed, err)
 	}
+	wantMessage := "レビュー指摘修正を承認してPR headへpushしました。修正処理を終了します。"
+	if !strings.Contains(out.String(), wantMessage) || strings.Contains(out.String(), "修正処理を終了し、Issue/PR選択へ戻ります。") {
+		t.Fatalf("output = %q", out.String())
+	}
 }
 
 func TestPRFixEmptyInputStartsWithSavedFeedback(t *testing.T) {
