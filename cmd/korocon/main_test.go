@@ -75,8 +75,8 @@ func TestRemainingInputReturnsOriginalWithoutReadAhead(t *testing.T) {
 }
 
 func TestSelectPullRequestDisplaysStatusAndLoadsSelectedNumber(t *testing.T) {
-	originalList, originalLoad := listPullRequests, loadPullRequest
-	t.Cleanup(func() { listPullRequests, loadPullRequest = originalList, originalLoad })
+	originalList, originalLoad, originalIssue := listPullRequests, loadPullRequest, loadIssue
+	t.Cleanup(func() { listPullRequests, loadPullRequest, loadIssue = originalList, originalLoad, originalIssue })
 	listPullRequests = func(context.Context, string) ([]prworkflow.PullRequest, error) {
 		return []prworkflow.PullRequest{
 			{Number: 3, Title: "Merged", State: "MERGED", ReviewDecision: "APPROVED", HeadRefName: "feature/3", BaseRefName: "main"},
@@ -104,6 +104,58 @@ func TestSelectPullRequestDisplaysStatusAndLoadsSelectedNumber(t *testing.T) {
 		strings.Contains(tableOutput, "APPROVED") || !strings.Contains(tableOutput, "5     レビュー承認済み") ||
 		!strings.Contains(tableOutput, "6     コンフリクト") {
 		t.Fatalf("output = %q", tableOutput)
+	}
+}
+
+func TestGitHubSelectionAcceptsIssueAliasesAndEmptyInput(t *testing.T) {
+	original := loadIssue
+	t.Cleanup(func() { loadIssue = original })
+	loadIssue = func(_ context.Context, _ string, number int, _ string) (*issueworkflow.Workflow, error) {
+		return &issueworkflow.Workflow{Issue: issueworkflow.Issue{Number: number, Title: "open", State: "OPEN"}, Phase: issueworkflow.PhaseDesign}, nil
+	}
+	for _, choice := range []string{"ISSUE", "issue", "I", "i", "1", ""} {
+		var out strings.Builder
+		_, selected, pr, err := selectGitHubInformation(context.Background(), strings.NewReader(choice+"\n42\n"), &out, ".", ".workspace", selectionModeDefault, "")
+		if err != nil || selected == nil || pr != nil || selected.Issue.Number != 42 {
+			t.Fatalf("choice %q: selected=%v pr=%v err=%v output=%q", choice, selected, pr, err, out.String())
+		}
+		if !strings.Contains(out.String(), "ISSUE/PR") {
+			t.Fatalf("choice %q did not show uppercase prompt: %q", choice, out.String())
+		}
+	}
+}
+
+func TestGitHubSelectionRejectsClosedIssueAndAllowsReselect(t *testing.T) {
+	original := loadIssue
+	t.Cleanup(func() { loadIssue = original })
+	loadIssue = func(_ context.Context, _ string, number int, _ string) (*issueworkflow.Workflow, error) {
+		state := "CLOSED"
+		if number == 43 {
+			state = "OPEN"
+		}
+		return &issueworkflow.Workflow{Issue: issueworkflow.Issue{Number: number, Title: "issue", State: state}, Phase: issueworkflow.PhaseDesign}, nil
+	}
+	var out strings.Builder
+	_, selected, _, err := selectGitHubInformation(context.Background(), strings.NewReader("issue\n42\nissue\n43\n"), &out, ".", ".workspace", selectionModeDefault, "")
+	if err != nil || selected == nil || selected.Issue.Number != 43 || !strings.Contains(out.String(), "CLOSED") {
+		t.Fatalf("selected=%v err=%v output=%q", selected, err, out.String())
+	}
+}
+
+func TestGitHubSelectionReturnsToChoiceWhenNoPullRequests(t *testing.T) {
+	originalList, originalLoad := listPullRequests, loadPullRequest
+	t.Cleanup(func() { listPullRequests, loadPullRequest = originalList, originalLoad })
+	listPullRequests = func(context.Context, string) ([]prworkflow.PullRequest, error) { return nil, nil }
+	loadPullRequest = func(context.Context, string, int, string) (*prworkflow.Workflow, error) {
+		return nil, errors.New("must not load")
+	}
+	loadIssue = func(_ context.Context, _ string, number int, _ string) (*issueworkflow.Workflow, error) {
+		return &issueworkflow.Workflow{Issue: issueworkflow.Issue{Number: number, State: "OPEN"}, Phase: issueworkflow.PhaseDesign}, nil
+	}
+	var out strings.Builder
+	_, selected, pr, err := selectGitHubInformation(context.Background(), strings.NewReader("pr\nissue\n42\n"), &out, ".", ".workspace", selectionModeDefault, "")
+	if err != nil || selected == nil || pr != nil || !strings.Contains(out.String(), "Pull Requestがありません") {
+		t.Fatalf("selected=%v pr=%v err=%v output=%q", selected, pr, err, out.String())
 	}
 }
 
@@ -338,7 +390,7 @@ func TestRunInteractiveFallsBackToInitialSelectionWhenRequestedIssueIsMissing(t 
 	}
 	if !strings.Contains(out.String(), "指定された対象を取得できませんでした") ||
 		!strings.Contains(out.String(), "通常の選択へ戻ります") ||
-		!strings.Contains(out.String(), "取得する情報を選択してください (issue/pr):") {
+		!strings.Contains(out.String(), "取得する情報を選択してください (ISSUE/PR):") {
 		t.Fatalf("output = %q", out.String())
 	}
 }

@@ -40,6 +40,7 @@ var currentGitHubUser = lookupCurrentGitHubUser
 var loadProjectMembership = fetchProjectMembership
 
 var errNoAutoTargets = errors.New("no automatic processing targets")
+var errReselectGitHubInformation = errors.New("reselect GitHub information")
 
 type selectionMode string
 
@@ -327,7 +328,15 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 					}
 				}
 				review = newIssueReviewController(selectedIssue, selectedIssue.Phase, stderr, implementationJob, implementationEngine.Close)
-				if selectedIssue.Phase == issueworkflow.PhaseImplementation {
+				if selectedIssue.PendingApproval {
+					result, path, loadErr := selectedIssue.LoadSavedResult()
+					if loadErr != nil {
+						return fmt.Errorf("Issue #%dの承認待ち成果物を読み込めません: %w", selectedIssue.Issue.Number, loadErr)
+					}
+					if err := review.SetPendingResult(result, path); err != nil {
+						return err
+					}
+				} else if selectedIssue.Phase == issueworkflow.PhaseImplementation {
 					initialJob = review.InitialJob()
 				} else {
 					initialPrompt = review.InitialPrompt()
@@ -578,9 +587,9 @@ func selectGitHubInformation(ctx context.Context, in io.Reader, out io.Writer, w
 		return remainingInput(in, reader), nil, selected, nil
 	}
 	for {
-		prompt := "取得する情報を選択してください (issue/pr): "
+		prompt := "取得する情報を選択してください (ISSUE/PR): "
 		if mode == selectionModeImplementer {
-			prompt = "実装者が担当する対象を選択してください (issue/pr): "
+			prompt = "実装者が担当する対象を選択してください (ISSUE/PR): "
 		}
 		if _, err := fmt.Fprint(out, prompt); err != nil {
 			return nil, nil, nil, err
@@ -590,20 +599,26 @@ func selectGitHubInformation(ctx context.Context, in io.Reader, out io.Writer, w
 			return nil, nil, nil, fmt.Errorf("GitHub情報の選択を読み取れません: %w", err)
 		}
 		switch strings.ToLower(strings.TrimSpace(choice)) {
-		case "1", "issue", "i":
+		case "", "1", "issue", "i":
 			selected, err := selectIssueForRole(ctx, reader, out, workingDir, workspaceName, mode, assigneeFilter, filters)
 			if err != nil {
+				if errors.Is(err, errReselectGitHubInformation) {
+					continue
+				}
 				return nil, nil, nil, err
 			}
 			return remainingInput(in, reader), selected, nil, nil
 		case "2", "pr", "p":
 			selected, err := selectPullRequestForRole(ctx, reader, out, workingDir, workspaceName, mode, assigneeFilter, filters)
 			if err != nil {
+				if errors.Is(err, errReselectGitHubInformation) {
+					continue
+				}
 				return nil, nil, nil, err
 			}
 			return remainingInput(in, reader), nil, selected, nil
 		default:
-			if _, writeErr := fmt.Fprintln(out, "issue または pr を入力してください。"); writeErr != nil {
+			if _, writeErr := fmt.Fprintln(out, "ISSUE または PR を入力してください。"); writeErr != nil {
 				return nil, nil, nil, writeErr
 			}
 		}
@@ -671,6 +686,12 @@ func selectIssueForRole(ctx context.Context, reader *bufio.Reader, out io.Writer
 	selected, err := loadIssue(ctx, workingDir, number, workspaceName)
 	if err != nil {
 		return nil, fmt.Errorf("Issue #%dの取得に失敗しました: %w", number, err)
+	}
+	if !issueIsOpen(selected.Issue) {
+		if _, err := fmt.Fprintf(out, "Issue #%d は OPEN ではありません（%s）。\n", number, strings.ToUpper(strings.TrimSpace(selected.Issue.State))); err != nil {
+			return nil, err
+		}
+		return nil, errReselectGitHubInformation
 	}
 	phaseName := "設計"
 	if selected.Phase == issueworkflow.PhaseImplementation {
@@ -820,6 +841,11 @@ func assignedToPR(assignees []prworkflow.User, filter string) bool {
 	return false
 }
 
+func issueIsOpen(issue issueworkflow.Issue) bool {
+	state := strings.TrimSpace(issue.State)
+	return state == "" || strings.EqualFold(state, "OPEN")
+}
+
 func remainingInput(original io.Reader, buffered *bufio.Reader) io.Reader {
 	if buffered.Buffered() == 0 {
 		return original
@@ -843,6 +869,12 @@ func selectIssue(ctx context.Context, reader *bufio.Reader, out io.Writer, worki
 	selected, err := loadIssue(ctx, workingDir, number, workspaceName)
 	if err != nil {
 		return nil, fmt.Errorf("issue #%dの取得に失敗しました: %w", number, err)
+	}
+	if !issueIsOpen(selected.Issue) {
+		if _, err := fmt.Fprintf(out, "Issue #%d は OPEN ではありません（%s）。\n", number, strings.ToUpper(strings.TrimSpace(selected.Issue.State))); err != nil {
+			return nil, err
+		}
+		return nil, errReselectGitHubInformation
 	}
 	phaseName := "設計"
 	if selected.Phase == issueworkflow.PhaseImplementation {
@@ -901,7 +933,10 @@ func selectPullRequestForRole(ctx context.Context, reader *bufio.Reader, out io.
 		if mode == selectionModeImplementer {
 			return nil, errors.New("実装者が担当するPRがありません")
 		}
-		return nil, errors.New("表示対象のPRがありません（MERGEDまたはDraftを除く）")
+		if _, err := fmt.Fprintln(out, "Pull Requestがありません。"); err != nil {
+			return nil, err
+		}
+		return nil, errReselectGitHubInformation
 	}
 	sort.Slice(prs, func(i, j int) bool { return prs[i].Number > prs[j].Number })
 	title := "\nPR一覧:"

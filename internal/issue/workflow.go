@@ -67,6 +67,7 @@ type Issue struct {
 	URL       string    `json:"url"`
 	Author    User      `json:"author"`
 	Assignees []User    `json:"assignees"`
+	State     string    `json:"state"`
 }
 
 type commandRunner interface {
@@ -102,6 +103,7 @@ type Workflow struct {
 	runner                commandRunner
 	Issue                 Issue
 	Phase                 Phase
+	PendingApproval       bool
 	workspaceName         string
 	publishImplementation func(context.Context, string) (string, error)
 }
@@ -115,7 +117,7 @@ func List(ctx context.Context, workingDir string) ([]Issue, error) {
 }
 
 func ListWithSearch(ctx context.Context, workingDir, search string) ([]Issue, error) {
-	args := []string{"issue", "list", "--state", "open", "--limit", "100", "--json", "number,title,body,labels,comments,url,author,assignees"}
+	args := []string{"issue", "list", "--state", "open", "--limit", "100", "--json", "number,title,body,labels,comments,url,author,assignees,state"}
 	if strings.TrimSpace(search) != "" {
 		args = append(args, "--search", strings.TrimSpace(search))
 	}
@@ -134,7 +136,7 @@ func load(ctx context.Context, workingDir string, number int, workspaceName stri
 	if number < 1 {
 		return nil, errors.New("issue number must be greater than zero")
 	}
-	raw, err := runner.Run(ctx, workingDir, "issue", "view", strconv.Itoa(number), "--json", "number,title,body,labels,comments,url,author,assignees")
+	raw, err := runner.Run(ctx, workingDir, "issue", "view", strconv.Itoa(number), "--json", "number,title,body,labels,comments,url,author,assignees,state")
 	if err != nil {
 		return nil, err
 	}
@@ -142,14 +144,14 @@ func load(ctx context.Context, workingDir string, number int, workspaceName stri
 	if err := json.Unmarshal(raw, &selected); err != nil {
 		return nil, fmt.Errorf("decode issue #%d: %w", number, err)
 	}
-	phase, err := classify(selected.Labels)
+	phase, pending, err := classify(selected.Labels)
 	if err != nil {
 		return nil, err
 	}
-	return &Workflow{dir: workingDir, runner: runner, Issue: selected, Phase: phase, workspaceName: workspaceName}, nil
+	return &Workflow{dir: workingDir, runner: runner, Issue: selected, Phase: phase, PendingApproval: pending, workspaceName: workspaceName}, nil
 }
 
-func classify(labels []Label) (Phase, error) {
+func classify(labels []Label) (Phase, bool, error) {
 	has := func(target string) bool {
 		for _, label := range labels {
 			if strings.EqualFold(strings.TrimSpace(label.Name), target) {
@@ -160,15 +162,15 @@ func classify(labels []Label) (Phase, error) {
 	}
 	switch {
 	case has("state:implementation_ready"):
-		return "", errors.New("issueは実装完了の承認待ちです")
+		return PhaseImplementation, true, nil
 	case has("state:implementation_approved"), has("state:pr_created"):
-		return "", errors.New("issueの実装工程は完了しています")
+		return "", false, errors.New("issueの実装工程は完了しています")
 	case has(labelDesignReady):
-		return "", errors.New("issueは設計完了の承認待ちです")
+		return PhaseDesign, true, nil
 	case has(labelDesignApproved), has(labelImplementationRunning):
-		return PhaseImplementation, nil
+		return PhaseImplementation, false, nil
 	default:
-		return PhaseDesign, nil
+		return PhaseDesign, false, nil
 	}
 }
 
@@ -287,6 +289,25 @@ func (w *Workflow) SaveResult(result string) (string, error) {
 		return path, nil
 	}
 	return filepath.ToSlash(relative), nil
+}
+
+// LoadSavedResult reads the approval artifact without generating or
+// overwriting it. It is used when an approval-pending issue is selected at
+// startup.
+func (w *Workflow) LoadSavedResult() (string, string, error) {
+	path, err := w.artifactPath()
+	if err != nil {
+		return "", "", err
+	}
+	result, err := os.ReadFile(path)
+	if err != nil {
+		return "", path, fmt.Errorf("read saved %s artifact: %w", w.Phase, err)
+	}
+	relative, relErr := filepath.Rel(w.dir, path)
+	if relErr == nil {
+		path = filepath.ToSlash(relative)
+	}
+	return string(result), path, nil
 }
 
 func (w *Workflow) Approve(ctx context.Context, result string) (string, error) {

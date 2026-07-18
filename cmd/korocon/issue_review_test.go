@@ -87,6 +87,23 @@ func TestIssueReviewApprovesEmptyInput(t *testing.T) {
 	}
 }
 
+func TestIssueReviewRestoresPendingArtifactWithoutStartingJob(t *testing.T) {
+	workflow := &fakeReviewWorkflow{number: 2, prompt: "design"}
+	var out bytes.Buffer
+	controller := newIssueReviewController(workflow, issueworkflow.PhaseDesign, &out, func(prompt string) *daemon.JobSpec {
+		return &daemon.JobSpec{Prompt: prompt}
+	}, nil)
+	if err := controller.SetPendingResult("# Issue\n\nsaved result", ".workspace/design/2_issue.md"); err != nil {
+		t.Fatal(err)
+	}
+	if action, err := controller.HandleInput(context.Background(), "approve"); err != nil || !action.Handled || action.Job == nil || workflow.approvedWith != "# Issue\n\nsaved result" {
+		t.Fatalf("action=%+v err=%v approved=%q", action, err, workflow.approvedWith)
+	}
+	if !strings.Contains(out.String(), "承認待ちの設計結果") || !strings.Contains(out.String(), ".workspace/design/2_issue.md") {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
 func TestIssueReviewImplementationApprovalClosesSessions(t *testing.T) {
 	workflow := &fakeReviewWorkflow{number: 2, prompt: "implement", approvedURL: "https://github.com/acme/repo/pull/1"}
 	closed := 0

@@ -61,6 +61,20 @@ func (c *issueReviewController) InitialPrompt() string {
 	return c.workflow.Prompt()
 }
 
+// SetPendingResult restores the approval state from an artifact loaded before
+// daemon.Run. No job is registered or started by this method.
+func (c *issueReviewController) SetPendingResult(result, path string) error {
+	c.mu.Lock()
+	c.pending = true
+	c.result = result
+	phase, revision := c.phaseNames()
+	_, err := fmt.Fprintf(c.out,
+		"\n\n---\n\n承認待ちの%s結果です。\n成果物: %s\n\n%s\n\n%sが完了しました。承認する場合は未入力状態でEnter、もしくは承認、approve、aのいずれかを入力してください。\n修正する場合は内容を入力してください。AIへ送信して%sします。\n",
+		phase, path, result, phase, revision)
+	c.mu.Unlock()
+	return err
+}
+
 func (c *issueReviewController) OnJobStart(ctx context.Context, id uint64, prompt string) error {
 	c.mu.Lock()
 	if c.prompts[prompt] == 0 {

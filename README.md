@@ -56,6 +56,8 @@ GitHubがPRを`CONFLICTING`または`DIRTY`と判定した場合、一覧には`
 
 対象番号が分かっている場合は選択を省略できます。指定対象が存在しない、または処理対象外の場合は理由を表示し、通常の`issue`/`pr`選択へ戻ります。`--issue`と`--pr`は同時指定できません。
 
+対話起動時の選択は`取得する情報を選択してください (ISSUE/PR):`と表示されます。`ISSUE`/`issue`/`I`/`i`または空入力でIssue選択、`PR`/`pr`/`P`/`p`でPR選択です（`1`/`2`も互換入力として利用できます）。不正入力は再入力となり、PRがない場合やOpenでないIssueを選んだ場合は選択画面へ戻ります。
+
 ```sh
 go run ./cmd/korocon --issue 42
 go run ./cmd/korocon --pr 4
@@ -64,6 +66,8 @@ go run ./cmd/korocon --pr 4
 PRレビューの`## 結果`が`要修正`または`コメントあり`の場合も、結果を表示して承認待ちになります。未入力Enterなどで承認するとレビューOKとして動作確認または終了へ進み、指摘内容を入力して送信するとPRへ登録して`state:pr_review_comment`へ更新し、最初の選択へ戻ります。`/rerun [補足]`でレビューを再実行できます。次に同じPRを選択すると実装者がPR head用worktreeで設計検討・実装・テストを行います。修正承認後も選択へ戻り、再レビューはレビューアの新しいセッションで行います。レビュー承認後は`startupCommand`が設定されていればレビューア工程として動作確認へ進み、PRをCLOSEDまたはMERGEDにして未入力Enterまたは`/check`を入力すると完了します。未設定ならレビュー承認時点でPR処理を終了します。
 
 Issueに`state:design_approved`がなければ設計、あれば実装を行います。開始時と完了時のラベルはkorobokcleと同じ状態遷移で更新します。
+
+起動時の選択は`ISSUE/PR`で行い、大小文字を区別しません。`I`/`P`と空入力（Issue）も受け付けます。PRが0件、またはIssueが`OPEN`以外の場合は選択へ戻ります。`state:design_ready`または`state:implementation_ready`のIssueは保存済み成果物を再表示して承認待ちを復元し、成果物がない場合は新規実行せずエラーにします。
 
 ```text
 設計: state:design_running -> state:design_ready

@@ -63,11 +63,36 @@ func TestLoadSelectsImplementationOnlyAfterDesignApproval(t *testing.T) {
 }
 
 func TestLoadStopsAtApprovalStates(t *testing.T) {
-	for _, label := range []string{"state:design_ready", "state:implementation_ready", "state:implementation_approved"} {
+	for _, label := range []string{"state:design_ready", "state:implementation_ready"} {
 		runner := &fakeRunner{responses: []string{`{"number":8,"title":"waiting","labels":[{"name":"` + label + `"}]}`}}
-		if _, err := load(context.Background(), ".", 8, ".workspace", runner); err == nil {
-			t.Fatalf("label %s should not start another workflow", label)
+		workflow, err := load(context.Background(), ".", 8, ".workspace", runner)
+		if err != nil || !workflow.PendingApproval {
+			t.Fatalf("label %s should restore approval state: workflow=%+v err=%v", label, workflow, err)
 		}
+	}
+	runner := &fakeRunner{responses: []string{`{"number":8,"title":"done","labels":[{"name":"state:implementation_approved"}]}`}}
+	if _, err := load(context.Background(), ".", 8, ".workspace", runner); err == nil {
+		t.Fatal("completed issue should not start another workflow")
+	}
+}
+
+func TestLoadReadsGitHubState(t *testing.T) {
+	runner := &fakeRunner{responses: []string{`{"number":8,"title":"closed","state":"CLOSED","labels":[]}`}}
+	workflow, err := load(context.Background(), ".", 8, ".workspace", runner)
+	if err != nil || workflow.Issue.State != "CLOSED" {
+		t.Fatalf("state = %q err=%v", workflow.Issue.State, err)
+	}
+}
+
+func TestLoadSavedResultUsesApprovalArtifact(t *testing.T) {
+	dir := t.TempDir()
+	workflow := &Workflow{dir: dir, workspaceName: ".workspace", Issue: Issue{Number: 8, Title: "Waiting"}, Phase: PhaseDesign}
+	if _, err := workflow.SaveResult("saved design"); err != nil {
+		t.Fatal(err)
+	}
+	result, path, err := workflow.LoadSavedResult()
+	if err != nil || result != "# Waiting\n\nsaved design" || path != ".workspace/design/8_waiting.md" {
+		t.Fatalf("result=%q path=%q err=%v", result, path, err)
 	}
 }
 

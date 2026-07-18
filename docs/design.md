@@ -128,7 +128,7 @@ Codexからコマンド実行の承認要求を受信すると許可リストを
 
 ### `internal/issue`
 
-選択したIssueをGitHub CLIからJSONで取得し、状態ラベルから設計・実装を判定します。Codexへ渡すIssueコンテキストの生成と、ジョブ開始・完了時の状態ラベル同期を担当します。具体的な設計・実装手順は扱いません。
+選択したIssueをGitHub CLIからJSONで取得し、GitHubの`state`でOpen判定したうえで状態ラベルから設計・実装を判定します。`state:design_ready`または`state:implementation_ready`は保存済み成果物を読み込む承認待ちとして再開します。Codexへ渡すIssueコンテキストの生成と、ジョブ開始・完了時の状態ラベル同期を担当します。具体的な設計・実装手順は扱いません。
 
 ### `internal/implementation`
 
@@ -146,7 +146,7 @@ Codexからコマンド実行の承認要求を受信すると許可リストを
 2. `codex app-server --stdio`を起動する
 3. `initialize`を送信し、`initialized`を通知する
 4. `thread/start`を送信してthread IDを保持する
-5. Issueが選択されていれば、状態を判定して初期ジョブをキューへ追加する
+5. ISSUE/PR選択で対象を決定し、PRなしや非Open Issueなら選択へ戻る。承認待ち成果物があれば初期ジョブを投入せず読み込む
 6. ジョブ開始前に`git fetch --prune origin`と`git pull --ff-only`を実行する
 7. GitHubの状態ラベルをrunningへ更新する
 8. 状態ラベル更新に成功したジョブについて、Issue番号と工程の開始メッセージおよび`---`を表示する
