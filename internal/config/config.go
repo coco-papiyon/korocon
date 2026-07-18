@@ -55,13 +55,21 @@ func DefaultAllowedCommands() []string {
 // Load reads config.json from the directory containing the korocon binary.
 // A missing file uses defaults so installed binaries remain self-contained.
 func Load() (Config, string, error) {
-	executable, err := os.Executable()
+	path, err := Path()
 	if err != nil {
-		return Config{}, "", fmt.Errorf("resolve executable path: %w", err)
+		return Config{}, "", err
 	}
-	path := filepath.Join(filepath.Dir(executable), FileName)
 	configured, err := loadFile(path)
 	return configured, path, err
+}
+
+// Path returns the config file beside the korocon executable.
+func Path() (string, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolve executable path: %w", err)
+	}
+	return filepath.Join(filepath.Dir(executable), FileName), nil
 }
 
 func Save(path string, configured Config) error {

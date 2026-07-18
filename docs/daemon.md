@@ -13,6 +13,10 @@ go build -o ./korocon ./cmd/korocon
 
 実行バイナリと同じディレクトリに`config.json`を配置します。
 
+手動作成の代わりに`korocon config init`で対話初期化できます。`baseBranch`、`branchNamePattern`、`startupCommand`を入力した後、役割別のProviderとModelを設定します。モデル設定だけを変更する場合は`korocon config model`を使用します。
+
+`builtinAllowedCommands`へコマンドを追加する場合は`korocon config allow "go test ./..."`を実行します。引数を省略すると追加するコマンドを対話入力できます。
+
 ```json
 {
   "workspaceName": ".workspace",

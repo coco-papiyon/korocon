@@ -100,6 +100,10 @@ GitHub Projects v2のフィルタは`--project <番号>`、`--project-owner <own
 
 `os.Executable`から実行バイナリのディレクトリを求め、同じディレクトリの`config.json`を読みます。ファイルがない場合は`workspaceName: .workspace`を使用します。不正なJSON、未知の設定項目、パスとして解釈できる`workspaceName`は起動エラーです。
 
+`korocon config init`は`baseBranch`、`branchNamePattern`、`startupCommand`を対話入力し、空入力を既定値として扱います。続けて共通のモデル設定処理を呼び出し、実装者・検証者・レビューアのProviderとModelを設定してから一度だけ保存します。既存ファイルは`--force`なしでは上書きしません。`korocon config model`は同じモデル設定処理を既存設定へ適用します。
+
+`korocon config allow [COMMAND]`は既存の自動承認コマンド正規化処理を使って`builtinAllowedCommands`へ追加し、重複時は設定ファイルを書き換えません。引数がない場合は標準入力からコマンドを対話取得します。
+
 実装設定として、ブランチ名規則、worktree親ディレクトリ、実装・検証ループ回数、PRのbaseブランチ、動作確認用の`startupCommand`も保持します。既定値は`issue_#<issue番号>`、`../<リポジトリ名>-branches/`、3回、`main`、動作確認コマンド未設定です。worktree親ディレクトリの`<リポジトリ名>`または`<repositoryName>`は実行時に置換します。`builtinAllowedCommands`は自動承認するコマンドを保持し、省略または空の場合はkorobokcleと同じ既定リストを補完します。
 
 AI設定は実装者、検証者、レビューアごとにProviderとModelを保持します。検証者・レビューアの各未指定値は実装者の解決済み設定を継承し、CLI引数、設定ファイル、既定値の順で解決します。Issue設計・実装、PRコンフリクト解消、レビュー指摘修正は実装者、Issue実装とレビュー指摘修正の検証は検証者、PRレビューはレビューアを使用します。

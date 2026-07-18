@@ -103,6 +103,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return nil
 	case "doctor":
 		return doctor(args[1:], stdout)
+	case "config":
+		return runConfig(args[1:], os.Stdin, stdout, stderr)
 	case "run":
 		return runPrompt(args[1:], stdout, stderr)
 	default:
@@ -1233,6 +1235,9 @@ func printUsage(w io.Writer) {
 
 Usage:
   korocon [options]
+  korocon config init [--force]
+  korocon config model
+  korocon config allow [COMMAND]
   korocon doctor [--binary codex]
   korocon version
 
