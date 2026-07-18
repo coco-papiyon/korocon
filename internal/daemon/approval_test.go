@@ -17,14 +17,28 @@ func TestCommandRequestAllowed(t *testing.T) {
 }
 
 func TestCommandRequestAllowedWithSafeArguments(t *testing.T) {
-	if !commandRequestAllowed(json.RawMessage(`{"command":"git diff --stat"}`), []string{"git diff"}) {
-		t.Fatal("expected git diff arguments to be allowed")
+	tests := []struct {
+		name    string
+		command string
+		allowed bool
+	}{
+		{name: "git add", command: "git add .", allowed: true},
+		{name: "git diff", command: "git diff --stat", allowed: true},
+		{name: "git status", command: "git status --short", allowed: true},
+		{name: "go test", command: "go test ./...", allowed: true},
+		{name: "pipeline", command: "git add . | rm -rf .", allowed: false},
+		{name: "chain", command: "git diff --stat && rm -rf .", allowed: false},
+		{name: "redirection", command: "git status > status.txt", allowed: false},
+		{name: "command substitution", command: "go test $(malicious)", allowed: false},
+		{name: "command-name prefix collision", command: "git different", allowed: false},
 	}
-	if commandRequestAllowed(json.RawMessage(`{"command":"git diff --stat && rm -rf ."}`), []string{"git diff"}) {
-		t.Fatal("expected chained command to be rejected")
-	}
-	if commandRequestAllowed(json.RawMessage(`{"command":"git different"}`), []string{"git diff"}) {
-		t.Fatal("expected command-name prefix collision to be rejected")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := commandRequestAllowed(json.RawMessage(`{"command":"`+test.command+`"}`), []string{"git add", "git diff", "git status", "go test"})
+			if got != test.allowed {
+				t.Fatalf("commandRequestAllowed(%q) = %v, want %v", test.command, got, test.allowed)
+			}
+		})
 	}
 }
 
