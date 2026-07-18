@@ -306,7 +306,7 @@ func (c *prReviewController) HandleInput(ctx context.Context, input string) (dae
 		c.mu.Lock()
 		c.pending, c.result = false, ""
 		c.mu.Unlock()
-		_, err := fmt.Fprintln(c.out, "レビュー指摘修正を承認してPR headへpushしました。修正処理を終了し、Issue/PR選択へ戻ります。")
+		_, err := fmt.Fprintln(c.out, "レビュー指摘修正を承認してPR headへpushしました。修正処理を終了します。")
 		return daemon.InputAction{Handled: true, Restart: true}, err
 	}
 	return c.enqueue(c.workflow.FixPrompt(input), true, "追加指示をAIへ送信し、レビュー指摘修正を再実行します。")
