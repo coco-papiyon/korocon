@@ -23,6 +23,8 @@ type fakeReviewWorkflow struct {
 	savedResults []string
 	phase        issueworkflow.Phase
 	startErr     error
+	finishErrs   []error
+	finishErr    error
 }
 
 func (w *fakeReviewWorkflow) IssueNumber() int { return w.number }
@@ -37,10 +39,11 @@ func (w *fakeReviewWorkflow) Start(context.Context) error {
 }
 
 func (w *fakeReviewWorkflow) Finish(_ context.Context, err error) error {
+	w.finishErrs = append(w.finishErrs, err)
 	if err == nil {
 		w.finished++
 	}
-	return nil
+	return w.finishErr
 }
 func (w *fakeReviewWorkflow) SaveResult(result string) (string, error) {
 	w.savedResults = append(w.savedResults, result)
@@ -202,6 +205,67 @@ func TestIssueReviewDoesNotPrintStartMessageWhenWorkflowStartFails(t *testing.T)
 	}
 	if strings.Contains(out.String(), "Issue #2の設計を開始します。") || strings.Contains(out.String(), "---") {
 		t.Fatalf("start message was printed after failed workflow start: %q", out.String())
+	}
+}
+
+type failingWriter struct {
+	err error
+}
+
+func (w failingWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+func TestIssueReviewRollsBackWhenStartMessageOutputFails(t *testing.T) {
+	outputErr := errors.New("output closed")
+	finishErr := errors.New("failed label update")
+	workflow := &fakeReviewWorkflow{number: 2, prompt: "design", finishErr: finishErr}
+	closed := 0
+	controller := newIssueReviewController(workflow, issueworkflow.PhaseDesign, failingWriter{err: outputErr}, nil, func() error {
+		closed++
+		return nil
+	})
+
+	err := controller.OnJobStart(context.Background(), 1, "design")
+	if !errors.Is(err, outputErr) || !errors.Is(err, finishErr) {
+		t.Fatalf("start error = %v, want output and finish errors", err)
+	}
+	if len(workflow.finishErrs) != 1 || !errors.Is(workflow.finishErrs[0], outputErr) {
+		t.Fatalf("finish errors = %v, want output error", workflow.finishErrs)
+	}
+	if len(controller.jobs) != 0 || controller.prompts["design"] != 1 {
+		t.Fatalf("job tracking was not rolled back: jobs=%v prompts=%v", controller.jobs, controller.prompts)
+	}
+	if closed != 0 {
+		t.Fatalf("design sessions were closed: %d", closed)
+	}
+
+	if err := controller.OnJobStart(context.Background(), 2, "design"); !errors.Is(err, outputErr) {
+		t.Fatalf("retry start error = %v, want %v", err, outputErr)
+	}
+	if workflow.started != 2 || len(workflow.finishErrs) != 2 {
+		t.Fatalf("retry state: started=%d finishErrors=%v", workflow.started, workflow.finishErrs)
+	}
+}
+
+func TestIssueReviewRollsBackImplementationStartMessageOutputFailure(t *testing.T) {
+	outputErr := errors.New("output closed")
+	workflow := &fakeReviewWorkflow{number: 2, prompt: "implement"}
+	closed := 0
+	controller := newIssueReviewController(workflow, issueworkflow.PhaseImplementation, failingWriter{err: outputErr}, nil, func() error {
+		closed++
+		return nil
+	})
+
+	err := controller.OnJobStart(context.Background(), 1, "implement")
+	if !errors.Is(err, outputErr) || closed != 1 {
+		t.Fatalf("start error=%v closed=%d", err, closed)
+	}
+	if len(workflow.finishErrs) != 1 || !errors.Is(workflow.finishErrs[0], outputErr) {
+		t.Fatalf("finish errors = %v, want output error", workflow.finishErrs)
+	}
+	if len(controller.jobs) != 0 || controller.prompts["implement"] != 1 {
+		t.Fatalf("job tracking was not rolled back: jobs=%v prompts=%v", controller.jobs, controller.prompts)
 	}
 }
 

@@ -80,7 +80,16 @@ func (c *issueReviewController) OnJobStart(ctx context.Context, id uint64, promp
 	}
 	phase, _ := c.phaseNames()
 	if _, err := fmt.Fprintf(c.out, "Issue #%dの%sを開始します。\n---\n", c.workflow.IssueNumber(), phase); err != nil {
-		return err
+		c.mu.Lock()
+		delete(c.jobs, id)
+		c.prompts[prompt]++
+		c.mu.Unlock()
+
+		finishErr := c.workflow.Finish(ctx, err)
+		if c.phase == issueworkflow.PhaseImplementation && c.closeImplementation != nil {
+			finishErr = errors.Join(finishErr, c.closeImplementation())
+		}
+		return errors.Join(err, finishErr)
 	}
 	return nil
 }
