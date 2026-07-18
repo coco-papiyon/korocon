@@ -258,7 +258,7 @@ worktreeパスがすでに存在する場合は作成コマンドを実行せず
 
 Codexへ渡す内容は「設計または実装を行う」という工程指示と、Issue番号・タイトル・URL・作成者・本文・ラベル・コメントです。具体的な手順と成果物形式は対象リポジトリのスキルに委ねます。ラベル操作などのワークフロー制御はAIプロンプトへ含めず、korocon自身が実行します。
 
-起動時は入力欄の上に実装者・検証者・レビューアのProviderとModel、設定ファイル、ログファイルが表示され、その下に入力待ちの`> `が表示されます。
+起動時は入力欄の上に主要設定をAI・GitHub・Workflowのグループに分けて表示し、その下に入力待ちの`> `が表示されます。AI設定は`Provider / Model / 実行バイナリ`形式で、実装者と同じ設定の検証者・レビューアは省略されます。設定ファイル、workspace名、実装ディレクトリ、ループ回数、自動承認コマンド数、ログファイルなどの詳細設定は起動時には表示しません。
 
 入力の先頭が `/` の行はコマンドとして扱われます。`/model` で選択可能なモデルを表示し、`/model 1` のように番号、または`/model gpt-5.6-terra` のようにモデル名を指定して切り替えます。koroconは常駐中のCodexへ`/model`相当のモデル変更要求を標準入力で送信し、Codexの成功応答後に表示中のモデルを更新します。選択したモデルは次のターンから同じthreadへ適用されます。先頭に空白がある行はコマンドではなくプロンプトです。
 
@@ -267,15 +267,18 @@ Codexがコマンド実行を要求した場合、`builtinAllowedCommands`に一
 許可リストに一致しない操作やファイル変更要求は画面へ表示します。未入力状態でEnterまたは`/approve`を入力すると今回だけ承認し、`/decline`で拒否します。`/allow`を入力すると今回の操作を承認し、Codexの`commandActions`から抽出した具体的なコマンドを実行中の許可リストとバイナリ横の`config.json`へ追加します。Linuxの先頭環境変数代入は除去して保存するため、`GOCACHE=/tmp/cache go test ./...`は`go test ./...`として追加されます。設定保存に失敗した場合は承認せず、承認待ちを継続します。`--dangerously-bypass-approvals-and-sandbox`は使用しません。
 
 ```text
-implementer: codex / gpt-5.6-luna / codex
-verifier: codex / gpt-5.4-mini / codex
-reviewer: copilot / claude-sonnet-4.5 / copilot
-config: /path/to/config.json
-workspace: .workspace
-branch: issue_#<issue番号>
-implementation directory: ../<リポジトリ名>-branches/
-implementation loops: 3
-log: korocon.log
+AI:
+  implementer     : codex / gpt-5.6-luna / codex
+  verifier        : codex / gpt-5.4-mini / codex
+  reviewer        : copilot / claude-sonnet-4.5 / copilot
+
+GitHub:
+  github reviewer : 未設定
+
+Workflow:
+  branch          : issue_#<issue番号>
+  base branch     : main
+  startup command : 未設定
 >
 [job 1] 実行中...
 [job 1] 完了（トークン数: 1234）

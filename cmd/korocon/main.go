@@ -257,7 +257,9 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 	if err != nil {
 		return fmt.Errorf("auto polling interval: %w", err)
 	}
-	fmt.Fprintf(stderr, "mode: %s\nimplementer: %s / %s / %s\nverifier: %s / %s / %s\nreviewer: %s / %s / %s\ngithub reviewer: %s\nconfig: %s\nworkspace: %s\nbranch: %s\nbase branch: %s\nimplementation directory: %s\nimplementation loops: %d\nauto polling interval: %s\nstartup command: %s\nauto-approved commands: %d\nlog: %s\n", mode, implementer.Provider, implementer.Model, aiBinaryName(implementer), verifier.Provider, verifier.Model, aiBinaryName(verifier), reviewer.Provider, reviewer.Model, aiBinaryName(reviewer), githubReviewer, configPath, configured.WorkspaceName, configured.BranchNamePattern, configured.BaseBranch, configured.ImplementationDirectory, configured.ImplementationLoopCount, configured.AutoPollingInterval, startupCommand, len(configured.BuiltinAllowedCommands), *logPath)
+	if err := writeStartupSummary(stderr, implementer, verifier, reviewer, githubReviewer, configured.BranchNamePattern, configured.BaseBranch, startupCommand); err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	selectionInput := in
@@ -508,6 +510,55 @@ func aiBinaryName(selection aiSelection) string {
 		return selection.Binary
 	}
 	return selection.Provider
+}
+
+const startupSummaryFieldWidth = 15
+
+func sameAISelection(left, right aiSelection) bool {
+	return left.Provider == right.Provider && left.Model == right.Model && aiBinaryName(left) == aiBinaryName(right)
+}
+
+func writeStartupSummary(out io.Writer, implementer, verifier, reviewer aiSelection, githubReviewer, branch, baseBranch, startupCommand string) error {
+	if _, err := fmt.Fprintln(out, "AI:"); err != nil {
+		return err
+	}
+	if err := writeStartupSummaryField(out, "implementer", formatAISelection(implementer)); err != nil {
+		return err
+	}
+	if !sameAISelection(implementer, verifier) {
+		if err := writeStartupSummaryField(out, "verifier", formatAISelection(verifier)); err != nil {
+			return err
+		}
+	}
+	if !sameAISelection(implementer, reviewer) {
+		if err := writeStartupSummaryField(out, "reviewer", formatAISelection(reviewer)); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintln(out, "\nGitHub:"); err != nil {
+		return err
+	}
+	if err := writeStartupSummaryField(out, "github reviewer", githubReviewer); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(out, "\nWorkflow:"); err != nil {
+		return err
+	}
+	for _, field := range [][2]string{{"branch", branch}, {"base branch", baseBranch}, {"startup command", startupCommand}} {
+		if err := writeStartupSummaryField(out, field[0], field[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeStartupSummaryField(out io.Writer, name, value string) error {
+	_, err := fmt.Fprintf(out, "  %-*s : %s\n", startupSummaryFieldWidth, name, value)
+	return err
+}
+
+func formatAISelection(selection aiSelection) string {
+	return fmt.Sprintf("%s / %s / %s", selection.Provider, selection.Model, aiBinaryName(selection))
 }
 
 func selectRequestedGitHubInformation(ctx context.Context, out io.Writer, workingDir, workspaceName string, requested requestedGitHubInformation, assigneeFilters ...string) (*issueworkflow.Workflow, *prworkflow.Workflow, error) {
