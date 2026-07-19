@@ -89,12 +89,34 @@ func TestPRReviewOffersRetryForPersistedFailure(t *testing.T) {
 	if controller.InitialPrompt() != "" || controller.InitialJob() != nil {
 		t.Fatalf("failed PR started automatically: prompt=%q job=%+v", controller.InitialPrompt(), controller.InitialJob())
 	}
-	if !strings.Contains(out.String(), "1. 続きから再実行") || !strings.Contains(out.String(), "2. 最初から再実行") || !strings.Contains(out.String(), "3. モデルを変更") {
+	if got := out.String(); !strings.Contains(got, "---\n[システム] 失敗したジョブの処理を選択してください。\n[システム] 1. 続きから再実行") || !strings.Contains(got, "[システム] 2. 最初から再実行") || !strings.Contains(got, "[システム] 3. モデルを変更") {
 		t.Fatalf("failure options were not displayed: %q", out.String())
 	}
 	action, err := controller.HandleInput(context.Background(), "1")
 	if err != nil || !action.Handled || action.Prompt != workflow.Prompt() {
 		t.Fatalf("unexpected retry action=%+v err=%v", action, err)
+	}
+}
+
+func TestPRReviewPersistedFailureUsesSystemMessageFormatForEveryFailurePhase(t *testing.T) {
+	for _, phase := range []prworkflow.Phase{
+		prworkflow.PhaseReviewFailed,
+		prworkflow.PhaseFixFailed,
+		prworkflow.PhaseConflictFailed,
+	} {
+		t.Run(string(phase), func(t *testing.T) {
+			workflow := &fakePRWorkflow{phase: phase}
+			var out bytes.Buffer
+			newPRReviewController(workflow, &out, nil, nil, nil, nil, nil)
+
+			got := out.String()
+			if !strings.HasPrefix(got, "---\n[システム] 失敗したジョブの処理を選択してください。\n") {
+				t.Fatalf("persisted failure message did not use system format: %q", got)
+			}
+			if !strings.Contains(got, "[システム] 3. モデルを変更") {
+				t.Fatalf("persisted failure options were incomplete: %q", got)
+			}
+		})
 	}
 }
 
@@ -277,7 +299,7 @@ func TestPRReviewApprovalWithoutStartupCommandAllowsEmptyURL(t *testing.T) {
 	controller := newPRReviewController(workflow, &out, nil, nil, nil, nil, nil)
 	completePRJob(t, controller, workflow.Prompt(), "review result")
 	action, err := controller.HandleInput(context.Background(), "approve")
-	if err != nil || !action.Handled || !action.Restart || !strings.Contains(out.String(), "PR URL: \n") {
+	if err != nil || !action.Handled || !action.Restart || !strings.Contains(out.String(), "[システム] PR URL:") {
 		t.Fatalf("action=%+v output=%q err=%v", action, out.String(), err)
 	}
 }

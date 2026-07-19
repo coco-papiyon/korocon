@@ -206,38 +206,41 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 	if cfg.StatusOut != nil {
 		commandOut = cfg.StatusOut
 	}
+	system := func(out io.Writer, format string, args ...any) {
+		_ = SystemMessage(out, fmt.Sprintf(format, args...))
+	}
 	var start func(string)
 	respondApproval := func(decision string, addAllowed bool) {
 		approvalMu.Lock()
 		approval := pendingApproval
 		approvalMu.Unlock()
 		if approval == nil {
-			_, _ = fmt.Fprintln(commandOut, "承認待ちの操作はありません。")
+			system(commandOut, "承認待ちの操作はありません。")
 			return
 		}
 		if addAllowed {
 			if approval.command == "" {
-				_, _ = fmt.Fprintln(commandOut, "自動承認へ追加できるコマンドを取得できませんでした。")
+				system(commandOut, "自動承認へ追加できるコマンドを取得できませんでした。")
 				return
 			}
 			if cfg.AddAllowedCommand == nil {
-				_, _ = fmt.Fprintln(commandOut, "自動承認コマンドの保存機能が設定されていません。")
+				system(commandOut, "自動承認コマンドの保存機能が設定されていません。")
 				return
 			}
 			if err := cfg.AddAllowedCommand(approval.command); err != nil {
-				_, _ = fmt.Fprintf(commandOut, "自動承認コマンドの保存に失敗しました: %v\n", err)
+				system(commandOut, "自動承認コマンドの保存に失敗しました: %v", err)
 				return
 			}
 			allowedMu.Lock()
 			allowedCommands = normalizeAllowedCommands(append(allowedCommands, approval.command))
 			allowedMu.Unlock()
-			_, _ = fmt.Fprintf(commandOut, "自動承認コマンドへ追加しました: %s\n", approval.command)
+			system(commandOut, "自動承認コマンドへ追加しました: %s", approval.command)
 		}
 		select {
 		case approval.decision <- decision:
-			_, _ = fmt.Fprintf(commandOut, "操作を%sしました。\n", map[bool]string{true: "承認", false: "拒否"}[decision == "accept"])
+			system(commandOut, "操作を%sしました。", map[bool]string{true: "承認", false: "拒否"}[decision == "accept"])
 		default:
-			_, _ = fmt.Fprintln(commandOut, "承認応答はすでに送信されています。")
+			system(commandOut, "承認応答はすでに送信されています。")
 		}
 	}
 	command := func(line string) {
@@ -251,21 +254,22 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				modelMu.RLock()
 				selectedModel := currentModel
 				modelMu.RUnlock()
-				_, _ = fmt.Fprintln(commandOut, "選択可能なモデル:")
+				modelLines := []string{"選択可能なモデル:"}
 				for i, name := range runner.AvailableModels {
 					marker := " "
 					if name == selectedModel {
 						marker = "*"
 					}
-					_, _ = fmt.Fprintf(commandOut, "  %d%s %s\n", i+1, marker, name)
+					modelLines = append(modelLines, fmt.Sprintf("  %d%s %s", i+1, marker, name))
 				}
-				_, _ = fmt.Fprintln(commandOut, "切り替えるには /model <番号> または /model <モデル名> を入力してください。")
+				modelLines = append(modelLines, "切り替えるには /model <番号> または /model <モデル名> を入力してください。")
+				system(commandOut, "%s", strings.Join(modelLines, "\n"))
 				return
 			}
 			selection := fields[1]
 			selected, ok := selectModel(selection)
 			if !ok {
-				_, _ = fmt.Fprintf(commandOut, "利用できないモデルです: %s\n", selection)
+				system(commandOut, "利用できないモデルです: %s", selection)
 				return
 			}
 			sessionMu.Lock()
@@ -273,7 +277,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			if session != nil {
 				if err := session.SetModel(ctx, selected); err != nil {
 					sessionMu.Unlock()
-					_, _ = fmt.Fprintf(commandOut, "Codexのモデル切替に失敗しました: %v\n", err)
+					system(commandOut, "Codexのモデル切替に失敗しました: %v", err)
 					return
 				}
 			}
@@ -281,7 +285,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			modelMu.Lock()
 			currentModel = selected
 			modelMu.Unlock()
-			_, _ = fmt.Fprintf(commandOut, "モデルを %s に切り替えました。\n", selected)
+			system(commandOut, "モデルを %s に切り替えました。", selected)
 			if cfg.OnModelChange != nil {
 				cfg.OnModelChange(selected)
 			}
@@ -296,7 +300,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			diff, available := latestDiff, hasLatestDiff
 			diffMu.RUnlock()
 			if !available || diff == "" {
-				_, _ = fmt.Fprintln(commandOut, "直前の修正のdiffはありません。")
+				system(commandOut, "直前の修正のdiffはありません。")
 				return
 			}
 			if len(fields) == 1 {
@@ -312,12 +316,12 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				diffPath = filepath.Join(cfg.WorkingDir, diffPath)
 			}
 			if err := os.WriteFile(diffPath, []byte(diff), 0o600); err != nil {
-				_, _ = fmt.Fprintf(commandOut, "diffの保存に失敗しました: %v\n", err)
+				system(commandOut, "diffの保存に失敗しました: %v", err)
 				return
 			}
-			_, _ = fmt.Fprintf(commandOut, "diffを保存しました: %s\n", filename)
+			system(commandOut, "diffを保存しました: %s", filename)
 		default:
-			_, _ = fmt.Fprintf(commandOut, "不明なコマンドです: %s\n", fields[0])
+			system(commandOut, "不明なコマンドです: %s", fields[0])
 		}
 	}
 	writeResult := func(id uint64, output string, err error) error {
@@ -595,7 +599,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		if cfg.HandleInput != nil {
 			action, err := cfg.HandleInput(ctx, line)
 			if err != nil {
-				_, _ = fmt.Fprintf(displayOut, "入力処理に失敗しました: %v\n", err)
+				system(displayOut, "入力処理に失敗しました: %v", err)
 				if !action.Restart {
 					promptMark()
 					return

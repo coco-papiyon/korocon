@@ -65,7 +65,7 @@ type prWorkflow interface {
 }
 
 func newPRReviewController(workflow prWorkflow, out io.Writer, fixJob, conflictJob func(string) *daemon.JobSpec, closeFix func() error, startVerification func(context.Context) (string, error), closeVerification func() error) *prReviewController {
-	c := &prReviewController{workflow: workflow, out: out, fixJob: fixJob, conflictJob: conflictJob, closeFix: closeFix, startVerification: startVerification, closeVerification: closeVerification, prompts: make(map[string]int), jobs: make(map[uint64]struct{})}
+	c := &prReviewController{workflow: workflow, out: daemon.NewSystemMessageWriter(out), fixJob: fixJob, conflictJob: conflictJob, closeFix: closeFix, startVerification: startVerification, closeVerification: closeVerification, prompts: make(map[string]int), jobs: make(map[uint64]struct{})}
 	phase := workflow.CurrentPhase()
 	if phase == prworkflow.PhaseReviewFailed || phase == prworkflow.PhaseFixFailed || phase == prworkflow.PhaseConflictFailed {
 		c.failed = true
@@ -80,7 +80,7 @@ func newPRReviewController(workflow prWorkflow, out io.Writer, fixJob, conflictJ
 			c.failedPrompt = workflow.Prompt()
 			workflow.SetPhase(prworkflow.PhaseReview)
 		}
-		_, _ = fmt.Fprintln(out, failureOptions())
+		_, _ = fmt.Fprintln(c.out, failureOptions())
 	} else if workflow.CurrentPhase() == prworkflow.PhaseFix {
 		c.awaitingFixInput = true
 	} else {
@@ -179,7 +179,7 @@ func (c *prReviewController) OnJobFinish(ctx context.Context, id uint64, prompt 
 	} else if c.workflow.CurrentPhase() == prworkflow.PhaseConflict {
 		phase = "コンフリクト解消"
 	}
-	_, err := fmt.Fprintf(c.out, "\n\n---\n\n%s結果を保存しました: %s\n%sが完了しました。承認する場合は未入力状態でEnter、もしくは承認、approve、aのいずれかを入力してください。\n", phase, artifact, phase)
+	_, err := fmt.Fprintf(c.out, "%s結果を保存しました: %s\n%sが完了しました。承認する場合は未入力状態でEnter、もしくは承認、approve、aのいずれかを入力してください。\n", phase, artifact, phase)
 	if c.workflow.CurrentPhase() == prworkflow.PhaseReview {
 		var noticeErr error
 		if reviewRequiresChanges(result) {
