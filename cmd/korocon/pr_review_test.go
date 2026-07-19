@@ -19,6 +19,7 @@ type fakePRWorkflow struct {
 	changes          string
 	fixApproved      string
 	conflictApproved string
+	url              string
 }
 
 func (w *fakePRWorkflow) Prompt() string                      { return "review prompt" }
@@ -31,6 +32,7 @@ func (w *fakePRWorkflow) SaveResult(string) (string, error)   { return ".workspa
 func (w *fakePRWorkflow) SetPhase(p prworkflow.Phase)         { w.phase = p }
 func (w *fakePRWorkflow) CurrentPhase() prworkflow.Phase      { return w.phase }
 func (w *fakePRWorkflow) Number() int                         { return 4 }
+func (w *fakePRWorkflow) URL() string                         { return w.url }
 func (w *fakePRWorkflow) CompleteIfClosed(context.Context) (bool, string, error) {
 	return w.completed, w.state, nil
 }
@@ -216,7 +218,7 @@ func TestReviewRequiresChanges(t *testing.T) {
 }
 
 func TestPRReviewApprovalWithoutStartupCommandReturnsToSelection(t *testing.T) {
-	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
+	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview, url: "https://github.com/owner/repository/pull/4"}
 	var out bytes.Buffer
 	controller := newPRReviewController(workflow, &out, nil, nil, nil, nil, nil)
 	completePRJob(t, controller, workflow.Prompt(), "review result")
@@ -226,6 +228,22 @@ func TestPRReviewApprovalWithoutStartupCommandReturnsToSelection(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "動作確認コマンドが設定されていないため、PR処理を終了します") {
 		t.Fatalf("output = %q", out.String())
+	}
+	for _, want := range []string{"動作確認後にPRをマージしてください。", "PR URL: https://github.com/owner/repository/pull/4"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output = %q, missing %q", out.String(), want)
+		}
+	}
+}
+
+func TestPRReviewApprovalWithoutStartupCommandAllowsEmptyURL(t *testing.T) {
+	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
+	var out bytes.Buffer
+	controller := newPRReviewController(workflow, &out, nil, nil, nil, nil, nil)
+	completePRJob(t, controller, workflow.Prompt(), "review result")
+	action, err := controller.HandleInput(context.Background(), "approve")
+	if err != nil || !action.Handled || !action.Restart || !strings.Contains(out.String(), "PR URL: \n") {
+		t.Fatalf("action=%+v output=%q err=%v", action, out.String(), err)
 	}
 }
 

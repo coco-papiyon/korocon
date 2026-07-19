@@ -288,6 +288,7 @@ func (w *Workflow) Finish(ctx context.Context, runErr error) error {
 func (w *Workflow) SetPhase(phase Phase) { w.Phase = phase }
 func (w *Workflow) CurrentPhase() Phase  { return w.Phase }
 func (w *Workflow) Number() int          { return w.PR.Number }
+func (w *Workflow) URL() string          { return w.PR.URL }
 
 func (w *Workflow) SaveReviewFeedback(ctx context.Context) (string, string, error) {
 	repository, err := w.repository(ctx)

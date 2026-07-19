@@ -183,7 +183,7 @@ AIが指摘を出した場合、または利用者がレビュー修正指示を
 
 Issueの設計・実装、PRレビュー指摘修正、PRコンフリクト解消は実装者を使用します。Issue実装とPRレビュー指摘修正の検証は検証者、PRレビューと動作確認はレビューアを使用します。担当が変わる工程は同じAIプロセスで連続実行しません。
 
-レビュー承認後、`startupCommand`が設定されていればコマンドを自動起動し、`state:review_approved`として動作確認を待ちます。動作確認を完了してPRをクローズまたはマージした後、未入力Enterまたは`/check`を入力します。PRがCLOSEDまたはMERGEDならコマンドを停止して`state:completed`へ更新し、最初の`issue`/`pr`選択へ戻ります。OPENの場合は動作確認待ちを継続します。`startupCommand`が未設定の場合はレビュー承認時点でPR処理を終了し、最初の選択へ戻ります。
+レビュー承認後、`startupCommand`が設定されていればコマンドを自動起動し、`state:review_approved`として動作確認を待ちます。動作確認を完了してPRをクローズまたはマージした後、未入力Enterまたは`/check`を入力します。PRがCLOSEDまたはMERGEDならコマンドを停止して`state:completed`へ更新し、最初の`issue`/`pr`選択へ戻ります。OPENの場合は動作確認待ちを継続します。`startupCommand`が未設定の場合は「動作確認後にPRをマージしてください。」という案内とPR URLを表示してPR処理を終了し、最初の選択へ戻ります。
 
 ### Issueの状態遷移
 

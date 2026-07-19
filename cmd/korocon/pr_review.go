@@ -44,6 +44,7 @@ type prWorkflow interface {
 	SetPhase(prworkflow.Phase)
 	CurrentPhase() prworkflow.Phase
 	Number() int
+	URL() string
 }
 
 func newPRReviewController(workflow prWorkflow, out io.Writer, fixJob, conflictJob func(string) *daemon.JobSpec, closeFix func() error, startVerification func(context.Context) (string, error), closeVerification func() error) *prReviewController {
@@ -268,7 +269,7 @@ func (c *prReviewController) HandleInput(ctx context.Context, input string) (dae
 			c.workflow.SetPhase(prworkflow.PhaseVerification)
 			c.mu.Unlock()
 			if c.startVerification == nil {
-				_, err := fmt.Fprintln(c.out, "レビューを承認しました。動作確認コマンドが設定されていないため、PR処理を終了します。")
+				_, err := fmt.Fprintf(c.out, "レビューを承認しました。動作確認コマンドが設定されていないため、PR処理を終了します。\n動作確認後にPRをマージしてください。\nPR URL: %s\n", c.workflow.URL())
 				if c.closeFix != nil {
 					err = errors.Join(err, c.closeFix())
 				}
