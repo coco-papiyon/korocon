@@ -53,12 +53,15 @@ func TestLoadAndReviewLifecycle(t *testing.T) {
 	if path != ".workspace/review/4_feature.md" {
 		t.Fatalf("artifact path = %q", path)
 	}
+	if err := os.WriteFile(filepath.Join(workflow.dir, filepath.FromSlash(path)), []byte("# 手動編集\n\nmanual review result"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := workflow.ApproveReview(context.Background(), "review result"); err != nil {
 		t.Fatal(err)
 	}
 	calls := strings.Join(runner.calls, "\n")
 	if !strings.Contains(calls, "--add-label state:review_running --remove-label state:pr_created") ||
-		!strings.Contains(calls, "pr comment 4 --body review result") ||
+		!strings.Contains(calls, "pr comment 4 --body # レビュー結果\n\nmanual review result") ||
 		!strings.Contains(calls, "--add-label state:review_approved") {
 		t.Fatalf("calls:\n%s", calls)
 	}
@@ -72,12 +75,18 @@ func TestRequestChangesAndApproveFix(t *testing.T) {
 		"pr comment 7 ":           "",
 	}}
 	workflow := &Workflow{dir: t.TempDir(), runner: runner, PR: PullRequest{Number: 7, Title: "Fix"}, Phase: PhaseReview}
+	if _, err := workflow.SaveResult("review"); err != nil {
+		t.Fatal(err)
+	}
 	if err := workflow.RequestChanges(context.Background(), "review", "add test"); err != nil {
 		t.Fatal(err)
 	}
 	published := false
 	workflow.SetFixPublisher(func(context.Context, string) error { published = true; return nil })
 	workflow.SetPhase(PhaseFix)
+	if _, err := workflow.SaveResult("fixed"); err != nil {
+		t.Fatal(err)
+	}
 	if err := workflow.ApproveFix(context.Background(), "fixed"); err != nil {
 		t.Fatal(err)
 	}

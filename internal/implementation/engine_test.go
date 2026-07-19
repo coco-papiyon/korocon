@@ -118,7 +118,7 @@ func TestEngineRepeatsImplementationUntilVerificationPasses(t *testing.T) {
 	if err := os.MkdirAll(worktree, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(repository, ".workspace", "design", "42_add-feature.md"), []byte("# Add feature\n\ndesign"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repository, ".workspace", "design", "42_add-feature.md"), []byte("# 設計結果\n\nmanual design edit"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	implementer := &fakeSession{results: []runner.TurnResult{{Text: "first", Tokens: 2}, {Text: "second", Tokens: 3}}}
@@ -156,6 +156,9 @@ func TestEngineRepeatsImplementationUntilVerificationPasses(t *testing.T) {
 	}
 	if len(implementer.prompts) != 2 || !strings.Contains(implementer.prompts[1], "fix tests") {
 		t.Fatalf("implementation prompts = %#v", implementer.prompts)
+	}
+	if !strings.Contains(implementer.prompts[0], "manual design edit") {
+		t.Fatalf("workspace design was not passed to implementation: %q", implementer.prompts[0])
 	}
 	if strings.Join(phases, ",") != "実装1回目,検証1回目,実装2回目,検証2回目" {
 		t.Fatalf("phases = %v", phases)

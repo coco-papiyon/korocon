@@ -427,21 +427,11 @@ func (w *Workflow) reviewFeedbackContent(inlineComments []InlineComment) string 
 }
 
 func (w *Workflow) SaveResult(result string) (string, error) {
-	workspace := strings.TrimSpace(w.workspaceName)
-	if workspace == "" {
-		workspace = ".workspace"
-	}
-	subdir := "review"
-	if w.Phase == PhaseFix {
-		subdir = "review_fix_implementation"
-	} else if w.Phase == PhaseConflict {
-		subdir = "pr_conflict"
-	}
-	path := filepath.Join(w.dir, workspace, subdir, fmt.Sprintf("%d_%s.md", w.PR.Number, sanitizePart(w.PR.Title)))
+	path := w.resultArtifactPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", fmt.Errorf("create PR artifact directory: %w", err)
 	}
-	content := fmt.Sprintf("# %s\n\n%s", strings.TrimSpace(w.PR.Title), stripLeadingH1(result))
+	content := withTopLevelHeading(w.resultArtifactHeading(), result)
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return "", fmt.Errorf("write PR artifact: %w", err)
 	}
@@ -452,42 +442,92 @@ func (w *Workflow) SaveResult(result string) (string, error) {
 	return filepath.ToSlash(relative), nil
 }
 
-func (w *Workflow) ApproveReview(ctx context.Context, result string) error {
-	if err := w.comment(ctx, result); err != nil {
+func (w *Workflow) resultArtifactPath() string {
+	workspace := strings.TrimSpace(w.workspaceName)
+	if workspace == "" {
+		workspace = ".workspace"
+	}
+	subdir := "review"
+	if w.Phase == PhaseFix {
+		subdir = "review_fix_implementation"
+	} else if w.Phase == PhaseConflict {
+		subdir = "pr_conflict"
+	}
+	return filepath.Join(w.dir, workspace, subdir, fmt.Sprintf("%d_%s.md", w.PR.Number, sanitizePart(w.PR.Title)))
+}
+
+func (w *Workflow) resultArtifactHeading() string {
+	switch w.Phase {
+	case PhaseFix:
+		return "レビュー指摘修正結果"
+	case PhaseConflict:
+		return "コンフリクト解消結果"
+	default:
+		return "レビュー結果"
+	}
+}
+
+func (w *Workflow) readResultArtifact() (string, error) {
+	path := w.resultArtifactPath()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read workspace artifact %s: %w", path, err)
+	}
+	return string(raw), nil
+}
+
+func (w *Workflow) ApproveReview(ctx context.Context, _ string) error {
+	artifact, err := w.readResultArtifact()
+	if err != nil {
+		return err
+	}
+	if err := w.comment(ctx, withTopLevelHeading("レビュー結果", artifact)); err != nil {
 		return err
 	}
 	return w.setStateLabel(ctx, "state:review_approved")
 }
 
-func (w *Workflow) RequestChanges(ctx context.Context, result, instruction string) error {
-	body := strings.TrimSpace(result) + "\n\n## レビュー修正指示\n" + strings.TrimSpace(instruction)
+func (w *Workflow) RequestChanges(ctx context.Context, _ string, instruction string) error {
+	artifact, err := w.readResultArtifact()
+	if err != nil {
+		return err
+	}
+	body := withTopLevelHeading("レビュー結果", artifact) + "\n\n## レビュー修正指示\n" + strings.TrimSpace(instruction)
 	if err := w.comment(ctx, body); err != nil {
 		return err
 	}
 	return w.setStateLabel(ctx, "state:pr_review_comment")
 }
 
-func (w *Workflow) ApproveFix(ctx context.Context, result string) error {
+func (w *Workflow) ApproveFix(ctx context.Context, _ string) error {
+	artifact, err := w.readResultArtifact()
+	if err != nil {
+		return err
+	}
 	if w.publishFix == nil {
 		return errors.New("review fix publisher is not configured")
 	}
-	if err := w.publishFix(ctx, result); err != nil {
+	if err := w.publishFix(ctx, artifact); err != nil {
 		return err
 	}
-	if err := w.comment(ctx, result); err != nil {
+	if err := w.comment(ctx, withTopLevelHeading("レビュー指摘修正結果", artifact)); err != nil {
 		return err
 	}
 	return w.setStateLabel(ctx, "state:review_fixed")
 }
 
-func (w *Workflow) ApproveConflict(ctx context.Context, result string) error {
+func (w *Workflow) ApproveConflict(ctx context.Context, _ string) error {
+	artifact, err := w.readResultArtifact()
+	if err != nil {
+		return err
+	}
 	if w.publishConflict == nil {
 		return errors.New("conflict publisher is not configured")
 	}
-	if err := w.publishConflict(ctx, result); err != nil {
+	if err := w.publishConflict(ctx, artifact); err != nil {
 		return err
 	}
-	if err := w.comment(ctx, result); err != nil {
+	if err := w.comment(ctx, withTopLevelHeading("コンフリクト解消結果", artifact)); err != nil {
 		return err
 	}
 	return w.setStateLabel(ctx, "state:pr_conflict_resolved")
@@ -614,4 +654,8 @@ func stripLeadingH1(content string) string {
 		return strings.TrimSpace(strings.Join(lines[1:], "\n"))
 	}
 	return trimmed
+}
+
+func withTopLevelHeading(heading, content string) string {
+	return strings.Join([]string{"# " + strings.TrimSpace(heading), "", stripLeadingH1(content)}, "\n")
 }

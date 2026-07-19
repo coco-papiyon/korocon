@@ -212,7 +212,7 @@ func TestSaveResultUsesKorobokcleWorkspaceLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(raw) != "# Add API / UI\n\nDesign body" {
+	if string(raw) != "# 設計結果\n\nDesign body" {
 		t.Fatalf("artifact = %q", raw)
 	}
 }
@@ -238,6 +238,13 @@ func TestApproveDesignPostsResultAndSetsApprovedLabel(t *testing.T) {
 	if _, err := workflow.SaveResult("saved design result"); err != nil {
 		t.Fatal(err)
 	}
+	path, err := workflow.artifactPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("# 手動編集\n\nmanual design result"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := workflow.Approve(context.Background(), "design result"); err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +252,7 @@ func TestApproveDesignPostsResultAndSetsApprovedLabel(t *testing.T) {
 		t.Fatalf("calls = %d", len(runner.calls))
 	}
 	comment := strings.Join(runner.calls[0], " ")
-	if !strings.Contains(comment, "issue comment 22 --body # Design title\n\nsaved design result") {
+	if !strings.Contains(comment, "issue comment 22 --body # 設計結果\n\nmanual design result") {
 		t.Fatalf("unexpected comment command: %q", comment)
 	}
 	edit := strings.Join(runner.calls[3], " ")
@@ -256,9 +263,13 @@ func TestApproveDesignPostsResultAndSetsApprovedLabel(t *testing.T) {
 
 func TestApproveImplementationCreatesPRAndSetsPRCreatedLabel(t *testing.T) {
 	runner := &fakeRunner{responses: []string{`{}`, `{"labels":[{"name":"state:implementation_ready"}]}`, `{}`}}
-	workflow := &Workflow{dir: ".", runner: runner, Issue: Issue{Number: 23}, Phase: PhaseImplementation}
+	dir := t.TempDir()
+	workflow := &Workflow{dir: dir, runner: runner, Issue: Issue{Number: 23, Title: "Implementation"}, Phase: PhaseImplementation}
+	if _, err := workflow.SaveResult("saved implementation result"); err != nil {
+		t.Fatal(err)
+	}
 	workflow.SetImplementationPublisher(func(_ context.Context, result string) (string, error) {
-		if result != "implementation result" {
+		if result != "# 実装結果\n\nsaved implementation result" {
 			t.Fatalf("result = %q", result)
 		}
 		return "https://github.com/acme/repo/pull/23", nil
@@ -281,7 +292,11 @@ func TestApproveImplementationCreatesPRAndSetsPRCreatedLabel(t *testing.T) {
 
 func TestApproveImplementationPublishFailureDoesNotChangeLabels(t *testing.T) {
 	runner := &fakeRunner{}
-	workflow := &Workflow{dir: ".", runner: runner, Issue: Issue{Number: 24}, Phase: PhaseImplementation}
+	dir := t.TempDir()
+	workflow := &Workflow{dir: dir, runner: runner, Issue: Issue{Number: 24, Title: "Implementation"}, Phase: PhaseImplementation}
+	if _, err := workflow.SaveResult("implementation result"); err != nil {
+		t.Fatal(err)
+	}
 	workflow.SetImplementationPublisher(func(context.Context, string) (string, error) {
 		return "", errors.New("push failed")
 	})

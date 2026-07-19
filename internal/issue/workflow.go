@@ -333,12 +333,16 @@ func (w *Workflow) SaveResult(result string) (string, error) {
 	return filepath.ToSlash(relative), nil
 }
 
-func (w *Workflow) Approve(ctx context.Context, result string) (string, error) {
+func (w *Workflow) Approve(ctx context.Context, _ string) (string, error) {
+	artifact, err := w.readArtifact()
+	if err != nil {
+		return "", err
+	}
 	if w.Phase == PhaseImplementation || w.Phase == PhaseImplementationReady || w.Phase == PhaseImplementationFailed {
 		if w.publishImplementation == nil {
 			return "", errors.New("implementation publisher is not configured")
 		}
-		url, err := w.publishImplementation(ctx, result)
+		url, err := w.publishImplementation(ctx, artifact)
 		if err != nil {
 			return "", err
 		}
@@ -348,17 +352,24 @@ func (w *Workflow) Approve(ctx context.Context, result string) (string, error) {
 		return url, nil
 	}
 	if w.Phase == PhaseDesign {
-		body := w.artifactContent(result)
-		if path, err := w.artifactPath(); err == nil {
-			if saved, readErr := os.ReadFile(path); readErr == nil {
-				body = string(saved)
-			}
-		}
+		body := withTopLevelHeading("設計結果", artifact)
 		if _, err := w.runner.Run(ctx, w.dir, "issue", "comment", strconv.Itoa(w.Issue.Number), "--body", body); err != nil {
 			return "", fmt.Errorf("post design result: %w", err)
 		}
 	}
 	return "", w.setStateLabel(ctx, labelDesignApproved)
+}
+
+func (w *Workflow) readArtifact() (string, error) {
+	path, err := w.artifactPath()
+	if err != nil {
+		return "", err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read workspace artifact %s: %w", path, err)
+	}
+	return string(raw), nil
 }
 
 func (w *Workflow) artifactPath() (string, error) {
@@ -378,11 +389,18 @@ func (w *Workflow) artifactPath() (string, error) {
 }
 
 func (w *Workflow) artifactContent(result string) string {
-	return strings.Join([]string{
-		fmt.Sprintf("# %s", w.Issue.Title),
-		"",
-		stripLeadingH1(result),
-	}, "\n")
+	return withTopLevelHeading(w.artifactHeading(), result)
+}
+
+func (w *Workflow) artifactHeading() string {
+	if w.Phase == PhaseImplementation || w.Phase == PhaseImplementationReady || w.Phase == PhaseImplementationFailed {
+		return "実装結果"
+	}
+	return "設計結果"
+}
+
+func withTopLevelHeading(heading, content string) string {
+	return strings.Join([]string{"# " + strings.TrimSpace(heading), "", stripLeadingH1(content)}, "\n")
 }
 
 func stripLeadingH1(content string) string {

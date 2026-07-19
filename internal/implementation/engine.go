@@ -185,11 +185,15 @@ func (e *Engine) Reset(ctx context.Context) error {
 	return err
 }
 
-func (e *Engine) Publish(ctx context.Context, result string) (string, error) {
+func (e *Engine) Publish(ctx context.Context, _ string) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if strings.TrimSpace(e.worktree) == "" || strings.TrimSpace(e.branch) == "" {
 		return "", errors.New("implementation worktree is not initialized")
+	}
+	artifact, err := os.ReadFile(e.implementationArtifactPath())
+	if err != nil {
+		return "", fmt.Errorf("read implementation artifact: %w", err)
 	}
 	message := fmt.Sprintf("feat: implement #%d %s", e.cfg.IssueNumber, strings.TrimSpace(e.cfg.IssueTitle))
 	if err := stageAndCommitIfNeeded(ctx, e.worktree, message); err != nil {
@@ -204,11 +208,7 @@ func (e *Engine) Publish(ctx context.Context, result string) (string, error) {
 	if url, ok := e.existingPullRequest(ctx); ok {
 		return url, nil
 	}
-	artifact := result
-	if saved, err := os.ReadFile(e.implementationArtifactPath()); err == nil {
-		artifact = string(saved)
-	}
-	body := buildPullRequestBody(e.cfg.IssueNumber, artifact)
+	body := buildPullRequestBody(e.cfg.IssueNumber, string(artifact))
 	args := buildPullRequestCreateArgs(e.cfg.BaseBranch, e.cfg.IssueTitle, body, e.branch, e.cfg.Reviewer)
 	out, err := runGHCommand(ctx, e.worktree, args...)
 	if err != nil {
