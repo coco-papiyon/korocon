@@ -42,7 +42,7 @@ var AvailableCopilotModels = []string{
 	"gpt-5.6-terra",
 	"gpt-5.6-luna",
 	"gpt-5-mini",
-	"cloade-sonnet-4.6",
+	"claude-sonnet-4.6",
 	"claude-opus-4.6",
 }
 

@@ -90,7 +90,7 @@ func TestConfigureModelsUsesAutoWhenImplementerChangesToCopilot(t *testing.T) {
 	if !strings.Contains(out.String(), "実装者で選択可能なモデル (provider: copilot):\n1. auto") {
 		t.Fatalf("output = %q", out.String())
 	}
-	for _, model := range []string{"1. auto", "2. gpt-5.6-sol", "3. gpt-5.6-terra", "4. gpt-5.6-luna", "5. gpt-5-mini", "6. cloade-sonnet-4.6", "7. claude-opus-4.6"} {
+	for _, model := range []string{"1. auto", "2. gpt-5.6-sol", "3. gpt-5.6-terra", "4. gpt-5.6-luna", "5. gpt-5-mini", "6. claude-sonnet-4.6", "7. claude-opus-4.6"} {
 		if !strings.Contains(out.String(), model) {
 			t.Fatalf("Copilot model %q was not displayed: %q", model, out.String())
 		}
