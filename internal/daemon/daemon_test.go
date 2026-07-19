@@ -4,11 +4,15 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/coco-papiyon/korocon/internal/runner"
@@ -16,6 +20,72 @@ import (
 
 type fakeDaemonSession struct {
 	model string
+}
+
+type concurrentApprovalSession struct {
+	handler   runner.ServerRequestHandler
+	decisions []string
+	errs      []error
+}
+
+func (s *concurrentApprovalSession) RunTurn(ctx context.Context, _ string, _ string, _ func()) (runner.TurnResult, error) {
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			params, _ := json.Marshal(map[string]string{"command": fmt.Sprintf("manual-command-%d", index)})
+			result, err := s.handler(ctx, "item/commandExecution/requestApproval", params)
+			mu.Lock()
+			defer mu.Unlock()
+			s.errs = append(s.errs, err)
+			if decision, ok := result.(map[string]string); ok {
+				s.decisions = append(s.decisions, decision["decision"])
+			}
+		}(i)
+	}
+	wg.Wait()
+	return runner.TurnResult{Text: "final review"}, nil
+}
+
+func (s *concurrentApprovalSession) Close() error { return nil }
+
+type approvalSignalWriter struct {
+	mu      sync.Mutex
+	buffer  bytes.Buffer
+	prompts chan<- struct{}
+}
+
+func (w *approvalSignalWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n, err := w.buffer.Write(p)
+	if bytes.Contains(p, []byte("[承認待ち]")) {
+		w.prompts <- struct{}{}
+	}
+	return n, err
+}
+
+func (w *approvalSignalWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buffer.String()
+}
+
+type approvalSignalReader struct {
+	prompts <-chan struct{}
+	left    int
+}
+
+func (r *approvalSignalReader) Read(p []byte) (int, error) {
+	if r.left == 0 {
+		return 0, io.EOF
+	}
+	<-r.prompts
+	p[0] = '\n'
+	r.left--
+	return 1, nil
 }
 
 func (s *fakeDaemonSession) RunTurn(_ context.Context, prompt, model string, onEvent func()) (runner.TurnResult, error) {
@@ -91,6 +161,41 @@ func TestRunStartsJobsInBackground(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "-p first") || !strings.Contains(out.String(), "-p second") {
 		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestRunQueuesConcurrentManualApprovals(t *testing.T) {
+	oldStart := startDaemonSession
+	var session *concurrentApprovalSession
+	startDaemonSession = func(_ context.Context, cfg runner.SessionConfig) (runner.AgentSession, error) {
+		session = &concurrentApprovalSession{handler: cfg.HandleRequest}
+		return session, nil
+	}
+	defer func() { startDaemonSession = oldStart }()
+
+	prompts := make(chan struct{}, 3)
+	status := &approvalSignalWriter{prompts: prompts}
+	in := &approvalSignalReader{prompts: prompts, left: 3}
+	if err := Run(context.Background(), in, io.Discard, Config{
+		Provider: "copilot", InitialPrompt: "review", StatusOut: status,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(session.errs) != 3 || len(session.decisions) != 3 {
+		t.Fatalf("errors = %v, decisions = %v", session.errs, session.decisions)
+	}
+	for _, err := range session.errs {
+		if err != nil {
+			t.Fatalf("approval error = %v", err)
+		}
+	}
+	for _, decision := range session.decisions {
+		if decision != "accept" {
+			t.Fatalf("decision = %q, want accept", decision)
+		}
+	}
+	if got := strings.Count(status.String(), "[承認待ち]"); got != 3 {
+		t.Fatalf("approval prompts = %d, want 3: %q", got, status.String())
 	}
 }
 

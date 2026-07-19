@@ -98,6 +98,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 	var allowedMu sync.RWMutex
 	var sessionMu sync.Mutex
 	var pendingApproval *approvalPrompt
+	approvalQueue := make(chan struct{}, 1)
 	allowedCommands := normalizeAllowedCommands(cfg.AllowedCommands)
 	allowedPaths := normalizeAllowedPaths(cfg.AllowedPaths)
 	logOut := synchronizedWriter{mu: &logMu, dst: cfg.LogOut}
@@ -147,6 +148,12 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			status("\r\033[2K[自動承認] %s\n", copilotPathApprovalDescription(params))
 			return map[string]string{"decision": "accept"}, nil
 		}
+		select {
+		case approvalQueue <- struct{}{}:
+			defer func() { <-approvalQueue }()
+		case <-requestCtx.Done():
+			return nil, requestCtx.Err()
+		}
 		var detail struct {
 			Command string `json:"command"`
 			Reason  string `json:"reason"`
@@ -159,10 +166,6 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		}
 		prompt := &approvalPrompt{decision: make(chan string, 1), command: command}
 		approvalMu.Lock()
-		if pendingApproval != nil {
-			approvalMu.Unlock()
-			return nil, errors.New("another Codex approval is already pending")
-		}
 		pendingApproval = prompt
 		approvalMu.Unlock()
 		defer func() {

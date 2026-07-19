@@ -63,6 +63,11 @@ func completePRJob(t *testing.T, controller *prReviewController, prompt, result 
 	}
 }
 
+func completeReviewResult(outcome, detail string) string {
+	return "## 結果\n" + outcome + "\n\n## 概要\n" + detail +
+		"\n\n## 要件と実装状況\n確認済み\n\n## 指摘事項\nなし\n\n## 確認事項\nなし"
+}
+
 func TestPRReviewOffersRetryAfterFailedJob(t *testing.T) {
 	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
 	var out bytes.Buffer
@@ -131,9 +136,10 @@ func TestPRReviewApprovalMovesToVerificationAndCompletesWhenClosed(t *testing.T)
 		closed++
 		return nil
 	})
-	completePRJob(t, controller, workflow.Prompt(), "review result")
+	reviewResult := completeReviewResult("問題なし", "review result")
+	completePRJob(t, controller, workflow.Prompt(), reviewResult)
 	action, err := controller.HandleInput(context.Background(), "")
-	if err != nil || !action.Handled || action.Restart || workflow.phase != prworkflow.PhaseVerification || workflow.approved != "review result" || started != 1 {
+	if err != nil || !action.Handled || action.Restart || workflow.phase != prworkflow.PhaseVerification || workflow.approved != reviewResult || started != 1 {
 		t.Fatalf("action=%+v workflow=%+v err=%v", action, workflow, err)
 	}
 	workflow.completed, workflow.state = false, "OPEN"
@@ -192,17 +198,18 @@ func TestPRFixEmptyInputStartsWithSavedFeedback(t *testing.T) {
 func TestPRReviewRerunAndFixInstruction(t *testing.T) {
 	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
 	controller := newPRReviewController(workflow, &bytes.Buffer{}, func(prompt string) *daemon.JobSpec { return &daemon.JobSpec{Prompt: prompt} }, nil, nil, nil, nil)
-	completePRJob(t, controller, workflow.Prompt(), "review result")
+	completePRJob(t, controller, workflow.Prompt(), completeReviewResult("問題なし", "review result"))
 	action, err := controller.HandleInput(context.Background(), "/rerun focus tests")
 	if err != nil || action.Prompt != "rerun: focus tests" {
 		t.Fatalf("rerun action=%+v err=%v", action, err)
 	}
-	completePRJob(t, controller, action.Prompt, "review result 2")
+	reviewResult := completeReviewResult("問題なし", "review result 2")
+	completePRJob(t, controller, action.Prompt, reviewResult)
 	action, err = controller.HandleInput(context.Background(), "テストを追加してください")
 	if err != nil || !action.Restart || action.Job != nil || workflow.phase != prworkflow.PhaseReview {
 		t.Fatalf("fix action=%+v workflow=%+v err=%v", action, workflow, err)
 	}
-	if workflow.changes != "review result 2:テストを追加してください" {
+	if workflow.changes != reviewResult+":テストを追加してください" {
 		t.Fatalf("changes = %q", workflow.changes)
 	}
 }
@@ -214,7 +221,7 @@ func TestPRReviewFindingsWaitForApproval(t *testing.T) {
 	if err := controller.OnJobStart(context.Background(), 1, workflow.Prompt()); err != nil {
 		t.Fatal(err)
 	}
-	result := "## 結果\n\n要修正\n\n## 指摘事項\n- 修正してください"
+	result := completeReviewResult("要修正", "修正が必要です")
 	err := controller.OnJobFinish(context.Background(), 1, workflow.Prompt(), result, nil)
 	if err != nil {
 		t.Fatalf("error = %v, want nil", err)
@@ -231,11 +238,31 @@ func TestPRReviewFindingsWaitForApproval(t *testing.T) {
 func TestPRReviewFindingsCanBeApproved(t *testing.T) {
 	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
 	controller := newPRReviewController(workflow, &bytes.Buffer{}, nil, nil, nil, nil, nil)
-	result := "## 結果\n\nコメントあり\n\n## 指摘事項\n- 確認してください"
+	result := completeReviewResult("コメントあり", "確認が必要です")
 	completePRJob(t, controller, workflow.Prompt(), result)
 	action, err := controller.HandleInput(context.Background(), "approve")
 	if err != nil || !action.Handled || !action.Restart || workflow.approved != result {
 		t.Fatalf("action=%+v workflow=%+v err=%v", action, workflow, err)
+	}
+}
+
+func TestPRReviewRejectsIncompleteFinalResponse(t *testing.T) {
+	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
+	var out bytes.Buffer
+	controller := newPRReviewController(workflow, &out, nil, nil, nil, nil, nil)
+	if err := controller.OnJobStart(context.Background(), 1, workflow.Prompt()); err != nil {
+		t.Fatal(err)
+	}
+	result := "PRの要件と実差分を照合してレビューします。"
+	err := controller.OnJobFinish(context.Background(), 1, workflow.Prompt(), result, nil)
+	if err == nil || !strings.Contains(err.Error(), "レビュー最終回答が不完全") {
+		t.Fatalf("error = %v", err)
+	}
+	if !controller.failed || controller.pending {
+		t.Fatalf("failed = %v, pending = %v", controller.failed, controller.pending)
+	}
+	if !strings.Contains(out.String(), "続きから再実行") {
+		t.Fatalf("retry options were not displayed: %q", out.String())
 	}
 }
 
@@ -278,9 +305,10 @@ func TestPRReviewApprovalWithoutStartupCommandReturnsToSelection(t *testing.T) {
 	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview, url: "https://github.com/owner/repository/pull/4"}
 	var out bytes.Buffer
 	controller := newPRReviewController(workflow, &out, nil, nil, nil, nil, nil)
-	completePRJob(t, controller, workflow.Prompt(), "review result")
+	reviewResult := completeReviewResult("問題なし", "review result")
+	completePRJob(t, controller, workflow.Prompt(), reviewResult)
 	action, err := controller.HandleInput(context.Background(), "approve")
-	if err != nil || !action.Handled || !action.Restart || workflow.approved != "review result" {
+	if err != nil || !action.Handled || !action.Restart || workflow.approved != reviewResult {
 		t.Fatalf("action=%+v workflow=%+v err=%v", action, workflow, err)
 	}
 	if !strings.Contains(out.String(), "動作確認コマンドが設定されていないため、PR処理を終了します") {
@@ -297,7 +325,7 @@ func TestPRReviewApprovalWithoutStartupCommandAllowsEmptyURL(t *testing.T) {
 	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
 	var out bytes.Buffer
 	controller := newPRReviewController(workflow, &out, nil, nil, nil, nil, nil)
-	completePRJob(t, controller, workflow.Prompt(), "review result")
+	completePRJob(t, controller, workflow.Prompt(), completeReviewResult("問題なし", "review result"))
 	action, err := controller.HandleInput(context.Background(), "approve")
 	if err != nil || !action.Handled || !action.Restart || !strings.Contains(out.String(), "[システム] PR URL:") {
 		t.Fatalf("action=%+v output=%q err=%v", action, out.String(), err)
@@ -309,7 +337,7 @@ func TestPRReviewKeepsApprovalPendingWhenStartupCommandFails(t *testing.T) {
 	controller := newPRReviewController(workflow, &bytes.Buffer{}, nil, nil, nil, func(context.Context) (string, error) {
 		return "", errors.New("start failed")
 	}, nil)
-	completePRJob(t, controller, workflow.Prompt(), "review result")
+	completePRJob(t, controller, workflow.Prompt(), completeReviewResult("問題なし", "review result"))
 	action, err := controller.HandleInput(context.Background(), "approve")
 	if err == nil || !action.Handled || action.Restart || workflow.approved != "" || workflow.phase != prworkflow.PhaseReview {
 		t.Fatalf("action=%+v workflow=%+v err=%v", action, workflow, err)
