@@ -352,6 +352,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 					}
 				}
 				review = newIssueReviewController(selectedIssue, selectedIssue.Phase, stderr, implementationJob, implementationEngine.Close)
+				review.SetResetImplementation(implementationEngine.Reset)
 				if selectedIssue.Phase == issueworkflow.PhaseImplementation {
 					initialJob = review.InitialJob()
 				} else {
@@ -410,6 +411,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 					defer closeVerification()
 				}
 				prController = newPRReviewController(selectedPR, stderr, fixJob, conflictJob, fixEngine.Close, startVerification, closeVerification)
+				prController.SetResetJob(fixEngine.Reset)
 				if job := prController.InitialJob(); job != nil {
 					initialJob = job
 				} else {
@@ -439,11 +441,13 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 				cfg.OnJobStart = review.OnJobStart
 				cfg.OnJobFinish = review.OnJobFinish
 				cfg.HandleInput = review.HandleInput
+				cfg.OnModelChange = review.OnModelChange
 			}
 			if prController != nil {
 				cfg.OnJobStart = prController.OnJobStart
 				cfg.OnJobFinish = prController.OnJobFinish
 				cfg.HandleInput = prController.HandleInput
+				cfg.OnModelChange = prController.OnModelChange
 			}
 			return daemon.Run(ctx, startupInput, stdout, cfg)
 		}()

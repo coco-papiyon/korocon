@@ -63,6 +63,25 @@ func completePRJob(t *testing.T, controller *prReviewController, prompt, result 
 	}
 }
 
+func TestPRReviewOffersRetryAfterFailedJob(t *testing.T) {
+	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
+	var out bytes.Buffer
+	controller := newPRReviewController(workflow, &out, nil, nil, nil, nil, nil)
+	if err := controller.OnJobStart(context.Background(), 1, workflow.Prompt()); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.OnJobFinish(context.Background(), 1, workflow.Prompt(), "", errors.New("agent failed")); err != nil {
+		t.Fatal(err)
+	}
+	action, err := controller.HandleInput(context.Background(), "")
+	if err != nil || !action.Handled || action.Prompt != workflow.Prompt() {
+		t.Fatalf("unexpected retry action=%+v err=%v", action, err)
+	}
+	if !strings.Contains(out.String(), "1. 続きから再実行") {
+		t.Fatalf("retry options were not displayed: %q", out.String())
+	}
+}
+
 func TestPRReviewApprovalMovesToVerificationAndCompletesWhenClosed(t *testing.T) {
 	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
 	var out bytes.Buffer

@@ -38,6 +38,7 @@ type Config struct {
 	OnJobStart        func(context.Context, uint64, string) error
 	OnJobFinish       func(context.Context, uint64, string, string, error) error
 	HandleInput       func(context.Context, string) (InputAction, error)
+	OnModelChange     func(string)
 }
 
 // InputAction tells Run whether an external workflow consumed an input and
@@ -281,6 +282,9 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			currentModel = selected
 			modelMu.Unlock()
 			_, _ = fmt.Fprintf(commandOut, "モデルを %s に切り替えました。\n", selected)
+			if cfg.OnModelChange != nil {
+				cfg.OnModelChange(selected)
+			}
 		case "/approve", "/allow", "/decline":
 			decision := "accept"
 			if fields[0] == "/decline" {

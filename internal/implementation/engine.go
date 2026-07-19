@@ -159,6 +159,32 @@ func (e *Engine) Close() error {
 	return err
 }
 
+// Reset closes the agent sessions and restores the implementation worktree to
+// the configured base branch before a from-scratch retry.
+func (e *Engine) Reset(ctx context.Context) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var err error
+	if e.implementer != nil {
+		err = errors.Join(err, e.implementer.Close())
+		e.implementer = nil
+	}
+	if e.verifier != nil {
+		err = errors.Join(err, e.verifier.Close())
+		e.verifier = nil
+	}
+	if strings.TrimSpace(e.worktree) == "" {
+		return err
+	}
+	if _, resetErr := runGitOutput(ctx, e.worktree, "reset", "--hard", e.cfg.BaseBranch); resetErr != nil {
+		return errors.Join(err, fmt.Errorf("reset implementation worktree: %w", resetErr))
+	}
+	if _, cleanErr := runGitOutput(ctx, e.worktree, "clean", "-fd"); cleanErr != nil {
+		return errors.Join(err, fmt.Errorf("clean implementation worktree: %w", cleanErr))
+	}
+	return err
+}
+
 func (e *Engine) Publish(ctx context.Context, result string) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

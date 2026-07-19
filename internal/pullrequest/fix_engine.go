@@ -79,9 +79,6 @@ func (e *FixEngine) Run(ctx context.Context, prompt, model string, handler runne
 	if err := e.ensureStarted(ctx, model, handler); err != nil {
 		return runner.TurnResult{}, err
 	}
-	if strings.TrimSpace(e.cfg.Model) != "" {
-		model = e.cfg.Model
-	}
 	feedback := ""
 	tokens := 0
 	for attempt := 1; attempt <= e.cfg.LoopCount; attempt++ {
@@ -150,9 +147,6 @@ func (e *FixEngine) RunConflict(ctx context.Context, prompt, model string, handl
 		"競合ファイル:", files,
 		"作業ディレクトリではbaseブランチのmergeを開始済みです。競合マーカーを解消し、必要なテストを実行してください。",
 	}, "\n")
-	if strings.TrimSpace(e.cfg.Model) != "" {
-		model = e.cfg.Model
-	}
 	return e.implementer.RunTurn(ctx, prompt, model, onEvent)
 }
 
@@ -231,6 +225,41 @@ func (e *FixEngine) Close() error {
 	if e.verifier != nil {
 		err = errors.Join(err, e.verifier.Close())
 		e.verifier = nil
+	}
+	return err
+}
+
+// Reset closes agent sessions and restores the PR worktree to the current PR
+// head. This is used by the from-scratch retry option.
+func (e *FixEngine) Reset(ctx context.Context) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var err error
+	if e.implementer != nil {
+		err = errors.Join(err, e.implementer.Close())
+		e.implementer = nil
+	}
+	if e.verifier != nil {
+		err = errors.Join(err, e.verifier.Close())
+		e.verifier = nil
+	}
+	e.conflictPrepared = false
+	if strings.TrimSpace(e.worktree) == "" {
+		return err
+	}
+	if mergeInProgress(ctx, e.worktree) {
+		if _, abortErr := gitOutput(ctx, e.worktree, "merge", "--abort"); abortErr != nil {
+			return errors.Join(err, fmt.Errorf("abort PR worktree merge: %w", abortErr))
+		}
+	}
+	if _, fetchErr := gitOutput(ctx, e.worktree, "fetch", "origin", e.cfg.HeadRefName); fetchErr != nil {
+		return errors.Join(err, fmt.Errorf("fetch PR head: %w", fetchErr))
+	}
+	if _, resetErr := gitOutput(ctx, e.worktree, "reset", "--hard", "origin/"+e.cfg.HeadRefName); resetErr != nil {
+		return errors.Join(err, fmt.Errorf("reset PR worktree: %w", resetErr))
+	}
+	if _, cleanErr := gitOutput(ctx, e.worktree, "clean", "-fd"); cleanErr != nil {
+		return errors.Join(err, fmt.Errorf("clean PR worktree: %w", cleanErr))
 	}
 	return err
 }

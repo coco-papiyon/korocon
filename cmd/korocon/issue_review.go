@@ -34,6 +34,23 @@ type issueReviewController struct {
 	result              string
 	implementationJob   func(string) *daemon.JobSpec
 	closeImplementation func() error
+	resetImplementation func(context.Context) error
+	failed              bool
+	failedPrompt        string
+}
+
+func (c *issueReviewController) SetResetImplementation(reset func(context.Context) error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.resetImplementation = reset
+}
+
+func (c *issueReviewController) OnModelChange(string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.failed {
+		_, _ = fmt.Fprintln(c.out, failureOptions())
+	}
 }
 
 func newIssueReviewController(workflow reviewWorkflow, phase issueworkflow.Phase, out io.Writer, implementationJob func(string) *daemon.JobSpec, closeImplementation func() error) *issueReviewController {
@@ -111,7 +128,7 @@ func (c *issueReviewController) OnJobStart(ctx context.Context, id uint64, promp
 	return nil
 }
 
-func (c *issueReviewController) OnJobFinish(ctx context.Context, id uint64, _ string, result string, runErr error) error {
+func (c *issueReviewController) OnJobFinish(ctx context.Context, id uint64, prompt string, result string, runErr error) error {
 	c.mu.Lock()
 	_, tracked := c.jobs[id]
 	delete(c.jobs, id)
@@ -136,9 +153,16 @@ func (c *issueReviewController) OnJobFinish(ctx context.Context, id uint64, _ st
 	}
 	if runErr != nil {
 		if c.phase == issueworkflow.PhaseImplementation && c.closeImplementation != nil {
-			return c.closeImplementation()
+			if err := c.closeImplementation(); err != nil {
+				return err
+			}
 		}
-		return nil
+		c.mu.Lock()
+		c.failed = true
+		c.failedPrompt = prompt
+		_, err := fmt.Fprintln(c.out, failureOptions())
+		c.mu.Unlock()
+		return err
 	}
 
 	c.mu.Lock()
@@ -154,6 +178,12 @@ func (c *issueReviewController) OnJobFinish(ctx context.Context, id uint64, _ st
 
 func (c *issueReviewController) HandleInput(ctx context.Context, input string) (daemon.InputAction, error) {
 	c.mu.Lock()
+	if c.failed {
+		failedPrompt := c.failedPrompt
+		reset := c.resetImplementation
+		c.mu.Unlock()
+		return c.handleFailureInput(ctx, input, failedPrompt, reset)
+	}
 	if !c.pending {
 		c.mu.Unlock()
 		return daemon.InputAction{}, nil
@@ -219,6 +249,47 @@ func (c *issueReviewController) HandleInput(ctx context.Context, input string) (
 		return daemon.InputAction{Handled: true, Job: c.implementationJob(prompt)}, err
 	}
 	return daemon.InputAction{Handled: true, Prompt: prompt}, err
+}
+
+func (c *issueReviewController) handleFailureInput(ctx context.Context, input, prompt string, reset func(context.Context) error) (daemon.InputAction, error) {
+	trimmed := strings.TrimSpace(input)
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "/model") {
+		return daemon.InputAction{}, nil
+	}
+	if lower == "3" || lower == "model" || lower == "モデル変更" {
+		_, err := fmt.Fprintln(c.out, "モデルを変更する場合は /model または /model <番号|モデル名> を入力してください。変更後、続きから再実行または最初から再実行を選択してください。")
+		return daemon.InputAction{Handled: true}, err
+	}
+	resetWorktree := lower == "2" || lower == "restart" || lower == "reset" || lower == "最初から" || lower == "最初から再実行"
+	continueWorktree := trimmed == "" || lower == "1" || lower == "retry" || lower == "continue" || lower == "続きから" || lower == "続きから再実行"
+	if !resetWorktree && !continueWorktree {
+		_, err := fmt.Fprintln(c.out, failureOptions())
+		return daemon.InputAction{Handled: true}, err
+	}
+	if resetWorktree && reset != nil {
+		if err := reset(ctx); err != nil {
+			return daemon.InputAction{Handled: true}, fmt.Errorf("worktreeを初期状態へ戻せませんでした: %w", err)
+		}
+	}
+	c.mu.Lock()
+	c.failed = false
+	c.failedPrompt = ""
+	c.prompts[prompt]++
+	phase := c.phase
+	c.mu.Unlock()
+	_, err := fmt.Fprintln(c.out, "失敗したジョブを再実行します。")
+	if phase == issueworkflow.PhaseImplementation {
+		if c.implementationJob == nil {
+			return daemon.InputAction{Handled: true}, errors.New("implementation job is not configured")
+		}
+		return daemon.InputAction{Handled: true, Job: c.implementationJob(prompt)}, err
+	}
+	return daemon.InputAction{Handled: true, Prompt: prompt}, err
+}
+
+func failureOptions() string {
+	return "失敗したジョブの処理を選択してください。\n1. 続きから再実行\n2. 最初から再実行（ブランチを初期状態へ戻す）\n3. モデルを変更\n未入力状態でEnterまたは1で続きから再実行、2で最初から再実行します。モデル変更は /model <番号|モデル名> を入力してください。"
 }
 
 func (c *issueReviewController) registerPrompt(prompt string) {

@@ -210,9 +210,10 @@ func TestIssueReviewFeedbackStartsTrackedRevision(t *testing.T) {
 	}
 }
 
-func TestIssueReviewDoesNotPromptAfterFailedJob(t *testing.T) {
+func TestIssueReviewOffersRetryAfterFailedJob(t *testing.T) {
 	workflow := &fakeReviewWorkflow{number: 2, prompt: "design"}
-	controller := newIssueReviewController(workflow, issueworkflow.PhaseDesign, &bytes.Buffer{}, nil, nil)
+	var out bytes.Buffer
+	controller := newIssueReviewController(workflow, issueworkflow.PhaseDesign, &out, nil, nil)
 	if err := controller.OnJobStart(context.Background(), 1, "design"); err != nil {
 		t.Fatal(err)
 	}
@@ -223,8 +224,11 @@ func TestIssueReviewDoesNotPromptAfterFailedJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if action.Handled {
-		t.Fatal("failed job entered approval state")
+	if !action.Handled || action.Prompt != "design" {
+		t.Fatalf("unexpected retry action: %+v", action)
+	}
+	if !strings.Contains(out.String(), "1. 続きから再実行") || !strings.Contains(out.String(), "2. 最初から再実行") {
+		t.Fatalf("retry options were not displayed: %q", out.String())
 	}
 }
 

@@ -26,6 +26,23 @@ type prReviewController struct {
 	pending           bool
 	result            string
 	awaitingFixInput  bool
+	resetJob          func(context.Context) error
+	failed            bool
+	failedPrompt      string
+}
+
+func (c *prReviewController) SetResetJob(reset func(context.Context) error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.resetJob = reset
+}
+
+func (c *prReviewController) OnModelChange(string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.failed {
+		_, _ = fmt.Fprintln(c.out, failureOptions())
+	}
 }
 
 type prWorkflow interface {
@@ -101,7 +118,7 @@ func (c *prReviewController) OnJobStart(ctx context.Context, id uint64, prompt s
 	return nil
 }
 
-func (c *prReviewController) OnJobFinish(ctx context.Context, id uint64, _ string, result string, runErr error) error {
+func (c *prReviewController) OnJobFinish(ctx context.Context, id uint64, prompt string, result string, runErr error) error {
 	c.mu.Lock()
 	_, tracked := c.jobs[id]
 	delete(c.jobs, id)
@@ -121,7 +138,17 @@ func (c *prReviewController) OnJobFinish(ctx context.Context, id uint64, _ strin
 		return err
 	}
 	if runErr != nil {
-		return nil
+		if c.closeFix != nil {
+			if err := c.closeFix(); err != nil {
+				return err
+			}
+		}
+		c.mu.Lock()
+		c.failed = true
+		c.failedPrompt = prompt
+		_, err := fmt.Fprintln(c.out, failureOptions())
+		c.mu.Unlock()
+		return err
 	}
 	c.mu.Lock()
 	c.pending, c.result = true, result
@@ -171,6 +198,13 @@ func reviewRequiresChanges(result string) bool {
 
 func (c *prReviewController) HandleInput(ctx context.Context, input string) (daemon.InputAction, error) {
 	c.mu.Lock()
+	if c.failed {
+		failedPrompt := c.failedPrompt
+		reset := c.resetJob
+		phase := c.workflow.CurrentPhase()
+		c.mu.Unlock()
+		return c.handleFailureInput(ctx, input, failedPrompt, phase, reset)
+	}
 	pending, result := c.pending, c.result
 	c.mu.Unlock()
 	if c.workflow.CurrentPhase() == prworkflow.PhaseVerification {
@@ -311,6 +345,40 @@ func (c *prReviewController) HandleInput(ctx context.Context, input string) (dae
 		return daemon.InputAction{Handled: true, Restart: true}, err
 	}
 	return c.enqueue(c.workflow.FixPrompt(input), true, "追加指示をAIへ送信し、レビュー指摘修正を再実行します。")
+}
+
+func (c *prReviewController) handleFailureInput(ctx context.Context, input, prompt string, phase prworkflow.Phase, reset func(context.Context) error) (daemon.InputAction, error) {
+	trimmed := strings.TrimSpace(input)
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "/model") {
+		return daemon.InputAction{}, nil
+	}
+	if lower == "3" || lower == "model" || lower == "モデル変更" {
+		_, err := fmt.Fprintln(c.out, "モデルを変更する場合は /model または /model <番号|モデル名> を入力してください。変更後、続きから再実行または最初から再実行を選択してください。")
+		return daemon.InputAction{Handled: true}, err
+	}
+	resetWorktree := lower == "2" || lower == "restart" || lower == "reset" || lower == "最初から" || lower == "最初から再実行"
+	continueWorktree := trimmed == "" || lower == "1" || lower == "retry" || lower == "continue" || lower == "続きから" || lower == "続きから再実行"
+	if !resetWorktree && !continueWorktree {
+		_, err := fmt.Fprintln(c.out, failureOptions())
+		return daemon.InputAction{Handled: true}, err
+	}
+	if resetWorktree && reset != nil {
+		if err := reset(ctx); err != nil {
+			return daemon.InputAction{Handled: true}, fmt.Errorf("worktreeを初期状態へ戻せませんでした: %w", err)
+		}
+	}
+	c.mu.Lock()
+	c.failed = false
+	c.failedPrompt = ""
+	c.mu.Unlock()
+	if phase == prworkflow.PhaseConflict {
+		return c.enqueueConflict(prompt, "失敗したコンフリクト解消を再実行します。")
+	}
+	if phase == prworkflow.PhaseFix {
+		return c.enqueue(prompt, true, "失敗したレビュー指摘修正を再実行します。")
+	}
+	return c.enqueue(prompt, false, "失敗したレビューを再実行します。")
 }
 
 func (c *prReviewController) enqueueConflict(prompt, message string) (daemon.InputAction, error) {
