@@ -46,8 +46,8 @@ func copilotACPArgs(model string) []string {
 	return args
 }
 
-// StartCopilotSession starts Copilot once, creates an ACP session, and enables
-// IDE integration before regular prompts are accepted.
+// StartCopilotSession starts Copilot once and creates an ACP session. IDE
+// integration is enabled lazily after the daemon input loop has started.
 func StartCopilotSession(ctx context.Context, cfg SessionConfig) (*CopilotSession, error) {
 	binary := strings.TrimSpace(cfg.Binary)
 	if binary == "" {
@@ -191,42 +191,60 @@ func (s *CopilotSession) runTurn(ctx context.Context, prompt string, onEvent fun
 		case <-s.done:
 			return TurnResult{}, s.processError()
 		case event := <-s.events:
-			if onEvent != nil {
-				onEvent()
-			}
-			if event.Method != "session/update" {
-				continue
-			}
-			var params struct {
-				SessionID string `json:"sessionId"`
-				Update    struct {
-					Type    string `json:"sessionUpdate"`
-					Content struct {
-						Type string `json:"type"`
-						Text string `json:"text"`
-					} `json:"content"`
-				} `json:"update"`
-			}
-			if json.Unmarshal(event.Params, &params) == nil && params.SessionID == s.sessionID &&
-				params.Update.Type == "agent_message_chunk" && params.Update.Content.Type == "text" {
-				text.WriteString(params.Update.Content.Text)
-			}
+			s.appendTurnEvent(event, &text, onEvent)
 		case message := <-response:
-			if message.Error != nil {
-				return TurnResult{}, fmt.Errorf("%s (%d)", message.Error.Message, message.Error.Code)
+			// stdout notifications precede the response, but the dispatcher sends
+			// them through a different channel. Drain those queued notifications so
+			// select scheduling cannot truncate the final agent message.
+			for {
+				select {
+				case event := <-s.events:
+					s.appendTurnEvent(event, &text, onEvent)
+				default:
+					return s.finishTurn(message, text.String())
+				}
 			}
-			var result struct {
-				StopReason string `json:"stopReason"`
-			}
-			if err := json.Unmarshal(message.Result, &result); err != nil {
-				return TurnResult{}, fmt.Errorf("decode session/prompt response: %w", err)
-			}
-			if result.StopReason != "end_turn" {
-				return TurnResult{}, fmt.Errorf("Copilot turn stopped: %s", result.StopReason)
-			}
-			return TurnResult{Text: strings.TrimSpace(text.String())}, nil
 		}
 	}
+}
+
+func (s *CopilotSession) appendTurnEvent(event rpcMessage, text *strings.Builder, onEvent func()) {
+	if onEvent != nil {
+		onEvent()
+	}
+	if event.Method != "session/update" {
+		return
+	}
+	var params struct {
+		SessionID string `json:"sessionId"`
+		Update    struct {
+			Type    string `json:"sessionUpdate"`
+			Content struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"update"`
+	}
+	if json.Unmarshal(event.Params, &params) == nil && params.SessionID == s.sessionID &&
+		params.Update.Type == "agent_message_chunk" && params.Update.Content.Type == "text" {
+		text.WriteString(params.Update.Content.Text)
+	}
+}
+
+func (s *CopilotSession) finishTurn(message rpcMessage, text string) (TurnResult, error) {
+	if message.Error != nil {
+		return TurnResult{}, fmt.Errorf("%s (%d)", message.Error.Message, message.Error.Code)
+	}
+	var result struct {
+		StopReason string `json:"stopReason"`
+	}
+	if err := json.Unmarshal(message.Result, &result); err != nil {
+		return TurnResult{}, fmt.Errorf("decode session/prompt response: %w", err)
+	}
+	if result.StopReason != "end_turn" {
+		return TurnResult{}, fmt.Errorf("Copilot turn stopped: %s", result.StopReason)
+	}
+	return TurnResult{Text: strings.TrimSpace(text)}, nil
 }
 
 func (s *CopilotSession) Close() error {

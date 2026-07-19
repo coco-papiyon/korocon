@@ -90,17 +90,98 @@ func commandRequestAllowed(params json.RawMessage, allowed []string) bool {
 
 func commandMatchesAllowed(command string, allowedSet map[string]struct{}) bool {
 	for _, candidate := range commandCandidates(command) {
-		normalized := normalizeCommand(candidate)
-		if _, ok := allowedSet[normalized]; ok {
-			return true
+		commands, ok := splitSafeCommandChain(candidate)
+		if !ok {
+			continue
 		}
-		for allowed := range allowedSet {
-			if strings.HasPrefix(normalized, allowed+" ") && safeCommandArguments(normalized[len(allowed):]) {
-				return true
+		allAllowed := true
+		for _, command := range commands {
+			if !simpleCommandMatchesAllowed(command, allowedSet) {
+				allAllowed = false
+				break
 			}
+		}
+		if allAllowed {
+			return true
 		}
 	}
 	return false
+}
+
+func simpleCommandMatchesAllowed(command string, allowedSet map[string]struct{}) bool {
+	normalized := normalizeCommand(stripAllowedStderrRedirection(command))
+	if _, ok := allowedSet[normalized]; ok {
+		return true
+	}
+	for allowed := range allowedSet {
+		if strings.HasPrefix(normalized, allowed+" ") && safeCommandArguments(normalized[len(allowed):]) {
+			return true
+		}
+	}
+	return false
+}
+
+func splitSafeCommandChain(command string) ([]string, bool) {
+	var commands []string
+	start := 0
+	var quote byte
+	escaped := false
+	for i := 0; i < len(command); i++ {
+		ch := command[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch ch {
+		case '\'', '"':
+			quote = ch
+		case '`', ';', '\r', '\n':
+			return nil, false
+		case '$':
+			if i+1 < len(command) && command[i+1] == '(' {
+				return nil, false
+			}
+		case '2':
+			if strings.HasPrefix(command[i:], "2>&1") && shellTokenBoundary(command, i-1) && shellTokenBoundary(command, i+4) {
+				i += 3
+			}
+		case '&', '|':
+			if i+1 >= len(command) || command[i+1] != ch {
+				return nil, false
+			}
+			part := strings.TrimSpace(command[start:i])
+			if part == "" {
+				return nil, false
+			}
+			commands = append(commands, part)
+			i++
+			start = i + 1
+		case '>', '<':
+			return nil, false
+		}
+	}
+	if escaped || quote != 0 {
+		return nil, false
+	}
+	part := strings.TrimSpace(command[start:])
+	if part == "" {
+		return nil, false
+	}
+	return append(commands, part), true
+}
+
+func shellTokenBoundary(command string, index int) bool {
+	return index < 0 || index >= len(command) || command[index] == ' ' || command[index] == '\t'
 }
 
 func safeCommandArguments(arguments string) bool {
@@ -110,6 +191,9 @@ func safeCommandArguments(arguments string) bool {
 
 func stripAllowedStderrRedirection(arguments string) string {
 	trimmed := strings.TrimSpace(arguments)
+	if strings.HasSuffix(trimmed, "2>&1") {
+		return strings.TrimSpace(strings.TrimSuffix(trimmed, "2>&1"))
+	}
 	devNull := strings.ToLower(strings.TrimSpace(os.DevNull))
 	for _, suffix := range []string{"2> " + devNull, "2>" + devNull, "2> " + strings.ToUpper(devNull), "2>" + strings.ToUpper(devNull)} {
 		if strings.HasSuffix(strings.ToLower(trimmed), suffix) {

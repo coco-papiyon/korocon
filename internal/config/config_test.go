@@ -140,7 +140,8 @@ func TestDefaultAllowedCommandsMatchesKorobokcle(t *testing.T) {
 	want := []string{
 		"npm install", "npm ci", "npm test",
 		"go build", "go test", "go mod tidy", "go mod download",
-		"git log", "git add", "git diff", "git status", "git stash",
+		"git log", "git add", "git commit", "git diff", "git status", "git stash", "git --no-pager diff", "git --no-pager grep",
+		"command -v", "cd", "true",
 		"ls", "dir", "cat", "type", "more", "head", "echo", "sed", "set", "pwd", "grep", "find", "tee", "wc",
 		"get-childitem", "get-content", "select-object", "select-string",
 	}

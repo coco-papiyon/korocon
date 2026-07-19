@@ -28,15 +28,24 @@ func TestCommandRequestAllowedWithSafeArguments(t *testing.T) {
 		{name: "git diff", command: "git diff --stat", allowed: true},
 		{name: "git status", command: "git status --short", allowed: true},
 		{name: "go test", command: "go test ./...", allowed: true},
+		{name: "safe and chain", command: "cd /tmp/worktree && go test ./...", allowed: true},
+		{name: "safe or chain", command: "command -v code || command -v codium || true", allowed: true},
+		{name: "stderr redirect", command: "go test -count=1 ./... 2>&1", allowed: true},
+		{name: "quoted pipe", command: `grep -rn "claude-opus\\|gpt-5\\.6-sol" .`, allowed: true},
 		{name: "pipeline", command: "git add . | rm -rf .", allowed: false},
 		{name: "chain", command: "git diff --stat && rm -rf .", allowed: false},
+		{name: "unclosed quote", command: `grep "value`, allowed: false},
 		{name: "redirection", command: "git status > status.txt", allowed: false},
 		{name: "command substitution", command: "go test $(malicious)", allowed: false},
 		{name: "command-name prefix collision", command: "git different", allowed: false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := commandRequestAllowed(json.RawMessage(`{"command":"`+test.command+`"}`), []string{"git add", "git diff", "git status", "go test"})
+			params, err := json.Marshal(map[string]string{"command": test.command})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := commandRequestAllowed(params, []string{"cd", "command -v", "true", "grep", "git add", "git diff", "git status", "go test"})
 			if got != test.allowed {
 				t.Fatalf("commandRequestAllowed(%q) = %v, want %v", test.command, got, test.allowed)
 			}
@@ -51,6 +60,48 @@ func TestCommandRequestAllowedWithCommandAction(t *testing.T) {
 	}`)
 	if !commandRequestAllowed(params, []string{"go test"}) {
 		t.Fatal("expected normalized command action to be allowed")
+	}
+}
+
+func TestRequestedCopilotCommandsAreAllowed(t *testing.T) {
+	allowed := []string{
+		"command -v", "cd", "true", "grep", "sed", "go test",
+		"git add", "git commit", "git --no-pager diff", "git --no-pager grep",
+	}
+	worktree := "/home/coco/dev/go/src/github.com/coco-papiyon/korocon-branches/korocon-21"
+	commands := []string{
+		"command -v code || command -v codium",
+		`cd ` + worktree + ` && grep -rn "claude-opus\|gpt-5\.6-sol\|cloade" --include="*.go" .`,
+		"cd " + worktree + " && git --no-pager diff --name-only",
+		"cd " + worktree + " && go test ./cmd/korocon ./internal/runner",
+		`cd ` + worktree + ` && git --no-pager grep -n "cloade-sonnet-4.6"`,
+		`cd ` + worktree + ` && grep -n "cloade-sonnet-4\.6" README.md docs/usage.md docs/design.md`,
+		`cd ` + worktree + ` && sed -i 's/cloade-sonnet-4\.6/claude-sonnet-4.6/g' README.md docs/usage.md docs/design.md`,
+		"cd " + worktree + " && go test ./cmd/korocon ./internal/runner 2>&1",
+		"cd " + worktree + " && go test -count=1 ./cmd/korocon ./internal/runner 2>&1",
+		"cd " + worktree + " && git add README.md docs/usage.md docs/design.md cmd/korocon/config_test.go && git commit -m \"fix model spelling (#21)\"",
+	}
+	for _, command := range commands {
+		params, err := json.Marshal(map[string]string{"command": command})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !commandRequestAllowed(params, allowed) {
+			t.Errorf("expected command to be allowed: %s", command)
+		}
+	}
+}
+
+func TestRequestedCopilotWorktreePathIsAllowed(t *testing.T) {
+	params, err := json.Marshal(map[string]any{"rawInput": map[string]string{
+		"path": "/home/coco/dev/go/src/github.com/coco-papiyon/korocon-branches/korocon-21/cmd/korocon/config_test.go",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := []string{"~/dev/go/src/github.com/coco-papiyon/korocon-branches/*/cmd/korocon/config_test.go"}
+	if !copilotPathRequestAllowed(params, allowed) {
+		t.Fatal("expected requested worktree path to be allowed")
 	}
 }
 

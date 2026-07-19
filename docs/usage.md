@@ -278,7 +278,7 @@ Codexへ渡す内容は「設計または実装を行う」という工程指示
 
 入力の先頭が `/` の行はコマンドとして扱われます。`/model` で選択可能なモデルを表示し、番号またはモデル名を指定して切り替えます。Codexには`thread/settings/update`、CopilotにはACPの`session/prompt`で`/model <モデル名>`を送り、成功応答後に表示中のモデルを更新します。プロセスと会話セッションは再起動しません。
 
-Codexがコマンド実行を要求した場合、`builtinAllowedCommands`に一致するコマンドは自動承認し、`[自動承認]`と対象を表示します。完全一致のほか、安全な引数やLinuxの安全な環境変数代入を付けた実行とCodexが提示する`proposedExecpolicyAmendment`、`commandActions`を判定します。`;`、`&&`、パイプ、コマンド置換などを含む複合実行は、許可コマンドから始まっていても自動承認しません。
+CodexまたはCopilotがコマンド実行を要求した場合、`builtinAllowedCommands`に一致するコマンドは自動承認し、`[自動承認]`と対象を表示します。完全一致のほか、安全な引数やLinuxの安全な環境変数代入を付けた実行とCodexが提示する`proposedExecpolicyAmendment`、`commandActions`を判定します。`&&`と`||`による複合実行は、引用符を考慮して分割した全コマンドが許可対象の場合だけ承認します。`;`、単一パイプ、コマンド置換、任意のリダイレクトを含む実行は自動承認しません。末尾の`2>&1`だけは許可します。
 
 CopilotのACP承認要求に`path`または`fileName`が含まれる場合は`builtinAllowedPaths`と照合します。`diff`の場合は`diff --git`ヘッダーから変更対象を抽出し、全対象が許可globに一致する場合だけ自動承認します。既定値ではCopilotのセッション状態に作成される`plan.md`だけが対象です。
 

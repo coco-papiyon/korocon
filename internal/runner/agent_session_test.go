@@ -171,6 +171,37 @@ func TestCopilotACPForwardsPathPermissionSeparately(t *testing.T) {
 	}
 }
 
+func TestCopilotACPCollectsAllChunksBeforeTurnResponse(t *testing.T) {
+	oldCommand := copilotACPCommand
+	copilotACPCommand = func(ctx context.Context, _ string, _ string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestCopilotACPHelperProcess")
+		cmd.Env = append(os.Environ(), "KOROCON_COPILOT_ACP_HELPER=1")
+		return cmd
+	}
+	defer func() { copilotACPCommand = oldCommand }()
+
+	session, err := StartCopilotSession(context.Background(), SessionConfig{
+		WorkingDir: t.TempDir(), LogErr: io.Discard,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := session.RunTurn(context.Background(), "chunked", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var want strings.Builder
+	for i := 0; i < 64; i++ {
+		fmt.Fprintf(&want, "chunk-%02d", i)
+	}
+	if result.Text != want.String() {
+		t.Fatalf("result length = %d, want %d: %q", len(result.Text), len(want.String()), result.Text)
+	}
+}
+
 func TestCopilotACPHelperProcess(t *testing.T) {
 	if os.Getenv("KOROCON_COPILOT_ACP_HELPER") != "1" {
 		return
@@ -245,10 +276,19 @@ func TestCopilotACPHelperProcess(t *testing.T) {
 					answer = fmt.Sprintf("answer:%s model:%s", prompt, model)
 				}
 			}
-			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{
-				"sessionId": params.SessionID,
-				"update":    map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": answer}},
-			}})
+			chunks := []string{answer}
+			if prompt == "chunked" {
+				chunks = chunks[:0]
+				for i := 0; i < 64; i++ {
+					chunks = append(chunks, fmt.Sprintf("chunk-%02d", i))
+				}
+			}
+			for _, chunk := range chunks {
+				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{
+					"sessionId": params.SessionID,
+					"update":    map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": chunk}},
+				}})
+			}
 			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]string{"stopReason": "end_turn"}})
 		}
 	}
