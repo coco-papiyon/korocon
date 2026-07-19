@@ -514,7 +514,7 @@ func TestExplicitBlankAssigneeDisablesCurrentUserLookup(t *testing.T) {
 		return nil, errors.New("not found")
 	}
 	var out strings.Builder
-	err := runInteractive([]string{"--issue", "404", "--assigne", "", "--log-file", filepath.Join(t.TempDir(), "korocon.log")}, strings.NewReader(""), &out, io.Discard)
+	err := runInteractive([]string{"--issue", "404", "--assignee", "", "--log-file", filepath.Join(t.TempDir(), "korocon.log")}, strings.NewReader(""), &out, io.Discard)
 	if err == nil || strings.Contains(err.Error(), "current user lookup") {
 		t.Fatalf("error = %v", err)
 	}
@@ -533,11 +533,31 @@ func TestResolveAISelectionDefaultsRolesToImplementer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if implementer.Provider != "copilot" || verifier != implementer {
+	if implementer.Provider != "copilot" || verifier.Provider != "copilot" || verifier.Model != "auto" {
 		t.Fatalf("implementer=%+v verifier=%+v", implementer, verifier)
 	}
 	if reviewer.Provider != "codex" || reviewer.Model != "claude-sonnet" {
 		t.Fatalf("reviewer=%+v", reviewer)
+	}
+}
+
+func TestResolveAISelectionDefaultsEmptyCopilotModelToAuto(t *testing.T) {
+	selection, err := resolveAISelection("copilot", "", aiSelection{Provider: "codex", Model: defaultModel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.Provider != "copilot" || selection.Model != "auto" {
+		t.Fatalf("selection = %+v", selection)
+	}
+}
+
+func TestResolveAISelectionConvertsCodexDefaultForCopilotToAuto(t *testing.T) {
+	selection, err := resolveAISelection("copilot", defaultModel, aiSelection{Provider: "codex", Model: defaultModel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.Model != "auto" {
+		t.Fatalf("selection = %+v", selection)
 	}
 }
 

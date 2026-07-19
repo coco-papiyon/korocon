@@ -142,7 +142,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 	var reviewerMode bool
 	fs.BoolVar(&reviewerMode, "reviewer", false, "select unreviewed pull requests assigned to the reviewer")
 	fs.BoolVar(&reviewerMode, "r", false, "shorthand for --reviewer")
-	assigne := fs.String("assigne", "", "filter issues and pull requests by assignee (blank disables the filter)")
+	assignee := fs.String("assignee", "", "filter issues and pull requests by assignee (blank disables the filter)")
 	var labelIncludes, labelExcludes, titleContains, authors stringListFlag
 	fs.Var(&labelIncludes, "label", "require label (repeatable)")
 	fs.Var(&labelExcludes, "exclude-label", "exclude label (repeatable)")
@@ -187,10 +187,10 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 	if *autoMode && (issueSpecified || prSpecified) {
 		return errors.New("--auto cannot be used with --issue or --pr")
 	}
-	assigneeFilter := strings.TrimSpace(*assigne)
+	assigneeFilter := strings.TrimSpace(*assignee)
 	assigneeSpecified := false
 	fs.Visit(func(selected *flag.Flag) {
-		if selected.Name == "assigne" {
+		if selected.Name == "assignee" {
 			assigneeSpecified = true
 		}
 	})
@@ -665,8 +665,12 @@ func resolveAISelection(provider, model string, fallback aiSelection) (aiSelecti
 		return aiSelection{}, fmt.Errorf("unsupported provider %q", provider)
 	}
 	model = strings.TrimSpace(model)
-	if model == "" {
-		model = fallback.Model
+	if model == "" || (provider == "copilot" && strings.EqualFold(model, defaultModel)) {
+		if provider == "copilot" {
+			model = "auto"
+		} else {
+			model = fallback.Model
+		}
 	}
 	return aiSelection{Provider: provider, Model: model}, nil
 }
@@ -1552,7 +1556,7 @@ Run options:
   -i                    shorthand for --implementer
   --reviewer            select only unreviewed pull requests for the reviewer
   -r                    shorthand for --reviewer
-  --assigne USER        filter by assignee; omitted uses gh api user, blank disables filtering
+  --assignee USER       filter by assignee; omitted uses gh api user, blank disables filtering
   --label NAME          require a label; repeat to require all labels
   --exclude-label NAME  exclude a label; repeatable
   --title TEXT          require a title substring; repeated values use OR

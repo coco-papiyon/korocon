@@ -38,6 +38,12 @@ var AvailableModels = []string{
 // Copilot CLI. Concrete model names can still be entered directly.
 var AvailableCopilotModels = []string{
 	"auto",
+	"gpt-5.6-sol",
+	"gpt-5.6-terra",
+	"gpt-5.6-luna",
+	"gpt-5-mini",
+	"cloade-sonnet-4.6",
+	"claude-opus-4.6",
 }
 
 // BuildArgs returns arguments without invoking a shell. Keeping this separate

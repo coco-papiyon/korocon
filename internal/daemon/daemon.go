@@ -73,9 +73,10 @@ type approvalPrompt struct {
 
 const maxProgressDots = 40
 
-// Run reads prompts while a Codex app-server remains active. Codex turns are
-// queued and executed in input order; other providers retain one process per
-// prompt. It returns on input EOF or when ctx is cancelled.
+var startDaemonSession = runner.StartAgentSession
+
+// Run reads prompts while one provider session remains active. Turns are
+// queued and executed in input order. It returns on input EOF or cancellation.
 func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 	if in == nil || out == nil {
 		return errors.New("daemon input and output are required")
@@ -175,33 +176,29 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		}
 	}
 
-	startPrimarySession := func(model string) (*runner.Session, error) {
+	startPrimarySession := func(model string) (runner.AgentSession, error) {
 		sessionLogOut := io.Writer(io.Discard)
 		sessionLogErr := io.Writer(io.Discard)
 		if cfg.StreamLogs {
 			sessionLogOut = logOut
 			sessionLogErr = logErr
 		}
-		return runner.StartSession(ctx, runner.SessionConfig{
-			Binary: cfg.Binary, Model: model, WorkingDir: cfg.WorkingDir,
+		return startDaemonSession(ctx, runner.SessionConfig{
+			Provider: provider, Binary: cfg.Binary, Model: model, WorkingDir: cfg.WorkingDir,
 			LogOut: sessionLogOut, LogErr: sessionLogErr, HandleRequest: handleServerRequest,
 		})
 	}
-	var codexSession *runner.Session
-	if provider == "codex" {
-		var err error
-		codexSession, err = startPrimarySession(currentModel)
-		if err != nil {
-			return err
-		}
-		defer func() {
-			sessionMu.Lock()
-			defer sessionMu.Unlock()
-			if codexSession != nil {
-				_ = codexSession.Close()
-			}
-		}()
+	primarySession, err := startPrimarySession(currentModel)
+	if err != nil {
+		return err
 	}
+	defer func() {
+		sessionMu.Lock()
+		defer sessionMu.Unlock()
+		if primarySession != nil {
+			_ = primarySession.Close()
+		}
+	}()
 	commandOut := resultOut
 	if cfg.StatusOut != nil {
 		commandOut = cfg.StatusOut
@@ -250,12 +247,16 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		}
 		switch fields[0] {
 		case "/model":
+			availableModels := runner.AvailableModels
+			if strings.EqualFold(provider, "copilot") {
+				availableModels = runner.AvailableCopilotModels
+			}
 			if len(fields) == 1 {
 				modelMu.RLock()
 				selectedModel := currentModel
 				modelMu.RUnlock()
 				modelLines := []string{"選択可能なモデル:"}
-				for i, name := range runner.AvailableModels {
+				for i, name := range availableModels {
 					marker := " "
 					if name == selectedModel {
 						marker = "*"
@@ -267,17 +268,23 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				return
 			}
 			selection := fields[1]
-			selected, ok := selectModel(selection)
+			selected, ok := selectModelFrom(selection, availableModels)
 			if !ok {
 				system(commandOut, "利用できないモデルです: %s", selection)
 				return
 			}
 			sessionMu.Lock()
-			session := codexSession
+			session := primarySession
 			if session != nil {
-				if err := session.SetModel(ctx, selected); err != nil {
+				modelSession, ok := session.(runner.ModelSession)
+				if !ok {
 					sessionMu.Unlock()
-					system(commandOut, "Codexのモデル切替に失敗しました: %v", err)
+					system(commandOut, "このProviderは実行中のモデル切替に対応していません。")
+					return
+				}
+				if err := modelSession.SetModel(ctx, selected); err != nil {
+					sessionMu.Unlock()
+					system(commandOut, "AIのモデル切替に失敗しました: %v", err)
 					return
 				}
 			}
@@ -397,18 +404,18 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			var err error
 			if job.execute != nil {
 				sessionMu.Lock()
-				if codexSession != nil {
-					_ = codexSession.Close()
-					codexSession = nil
+				if primarySession != nil {
+					_ = primarySession.Close()
+					primarySession = nil
 				}
 				sessionMu.Unlock()
 				result, err = job.execute(ctx, job.model, handleServerRequest, setPhase, showProgress)
 			} else {
 				sessionMu.Lock()
-				if codexSession == nil {
-					codexSession, err = startPrimarySession(job.model)
+				if primarySession == nil {
+					primarySession, err = startPrimarySession(job.model)
 				}
-				session := codexSession
+				session := primarySession
 				sessionMu.Unlock()
 				if err == nil {
 					result, err = session.RunTurn(ctx, job.prompt, "", showProgress)
@@ -487,102 +494,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			}
 		}
 		status("[job %d] 実行中...", id)
-		if spec.Execute != nil || provider == "codex" {
-			residentJobs <- residentJob{id: id, prompt: prompt, model: jobModel, execute: spec.Execute}
-			return
-		}
-		var progressMu sync.Mutex
-		dots := 1
-		showProgress := func() {
-			progressMu.Lock()
-			defer progressMu.Unlock()
-			dots++
-			if dots > maxProgressDots {
-				dots = 1
-			}
-			status("\r\033[2K[job %d] 実行中%s", id, strings.Repeat(".", dots))
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			var stdout, stderr strings.Builder
-			var streamedResult strings.Builder
-			var resultWriter *jsonResultWriter
-			req := runner.Request{
-				Provider: cfg.Provider, Binary: cfg.Binary, Prompt: prompt,
-				Model: jobModel, WorkingDir: cfg.WorkingDir,
-				AllowAllTools: cfg.AllowAllTools, Stdout: &stdout, Stderr: &stderr,
-			}
-			if cfg.StreamLogs {
-				if cfg.Provider == "codex" || cfg.Provider == "" {
-					resultWriter = &jsonResultWriter{log: progressWriter{dst: logOut, onWrite: showProgress}, result: &streamedResult, progress: showProgress, toolStatus: toolStatus.update}
-					req.Stdout = resultWriter
-				} else {
-					req.Stdout = progressWriter{dst: io.MultiWriter(logOut, &streamedResult), onWrite: showProgress}
-				}
-				req.Stderr = progressWriter{dst: logErr, onWrite: showProgress}
-			}
-			err := runner.Run(ctx, req)
-			if diff, diffErr := captureGitDiff(cfg.WorkingDir); diffErr == nil {
-				diffMu.Lock()
-				latestDiff = diff
-				hasLatestDiff = true
-				diffMu.Unlock()
-			}
-			if cfg.StreamLogs {
-				if err != nil {
-					_ = writeResult(id, "", err)
-				}
-				if err == nil {
-					tokens := 0
-					if resultWriter != nil {
-						tokens = resultWriter.TokenCount()
-					}
-					if tokens > 0 {
-						status("\r\033[2K[job %d] 完了（トークン数: %d）\n", id, tokens)
-					} else {
-						status("\r\033[2K[job %d] 完了\n", id)
-					}
-					if streamedResult.Len() > 0 {
-						_, _ = io.WriteString(displayOut, streamedResult.String())
-					}
-					if cfg.OnJobFinish != nil {
-						if handleFinishError(id, cfg.OnJobFinish(ctx, id, prompt, streamedResult.String(), nil)) {
-							return
-						}
-					}
-					promptMark()
-				} else {
-					status("\r\033[2K[job %d] 失敗\n", id)
-					if cfg.OnJobFinish != nil {
-						if handleFinishError(id, cfg.OnJobFinish(ctx, id, prompt, "", err)) {
-							return
-						}
-					}
-					promptMark()
-				}
-				return
-			}
-			if err != nil && stdout.Len() == 0 {
-				stdout.WriteString(stderr.String())
-			}
-			_ = writeResult(id, stdout.String(), err)
-			if err == nil {
-				status("\r\033[2K[job %d] 完了\n", id)
-			} else {
-				status("\r\033[2K[job %d] 失敗\n", id)
-			}
-			if cfg.OnJobFinish != nil {
-				result := stdout.String()
-				if err != nil {
-					result = ""
-				}
-				if handleFinishError(id, cfg.OnJobFinish(ctx, id, prompt, result, err)) {
-					return
-				}
-			}
-			promptMark()
-		}()
+		residentJobs <- residentJob{id: id, prompt: prompt, model: jobModel, execute: spec.Execute}
 	}
 
 	processInput := func(line string) {
@@ -708,7 +620,11 @@ type readLineResult struct {
 // the model name returned here canonical so it is passed unchanged to Codex's
 // turn/start request.
 func selectModel(selection string) (string, bool) {
-	for i, name := range runner.AvailableModels {
+	return selectModelFrom(selection, runner.AvailableModels)
+}
+
+func selectModelFrom(selection string, models []string) (string, bool) {
+	for i, name := range models {
 		if selection == name || selection == fmt.Sprint(i+1) {
 			return name, true
 		}

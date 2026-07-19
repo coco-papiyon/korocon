@@ -50,6 +50,29 @@ func TestInitializeConfigPromptsSettingsAndModels(t *testing.T) {
 	}
 }
 
+func TestPrintConfigList(t *testing.T) {
+	configured := appconfig.Default()
+	configured.ImplementerProvider = "copilot"
+	configured.ImplementerModel = "auto"
+	configured.BuiltinAllowedCommands = []string{"go test ./...", "git status"}
+	var out strings.Builder
+	if err := printConfigList(&out, "/tmp/korocon/config.json", configured); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"設定一覧",
+		"config: /tmp/korocon/config.json",
+		"implementerProvider: copilot",
+		"implementerModel: auto",
+		"  - go test ./...",
+		"  - git status",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output does not contain %q: %q", want, out.String())
+		}
+	}
+}
+
 func TestConfigureModelsUsesAutoWhenImplementerChangesToCopilot(t *testing.T) {
 	configured := appconfig.Default()
 	input := strings.Join([]string{"copilot", "", "", "", "", ""}, "\n") + "\n"
@@ -64,8 +87,10 @@ func TestConfigureModelsUsesAutoWhenImplementerChangesToCopilot(t *testing.T) {
 	if !strings.Contains(out.String(), "実装者で選択可能なモデル (provider: copilot):\n1. auto") {
 		t.Fatalf("output = %q", out.String())
 	}
-	if strings.Contains(out.String(), "gpt-5.6-sol") {
-		t.Fatalf("Codex models were displayed for Copilot: %q", out.String())
+	for _, model := range []string{"1. auto", "2. gpt-5.6-sol", "3. gpt-5.6-terra", "4. gpt-5.6-luna", "5. gpt-5-mini", "6. cloade-sonnet-4.6", "7. claude-opus-4.6"} {
+		if !strings.Contains(out.String(), model) {
+			t.Fatalf("Copilot model %q was not displayed: %q", model, out.String())
+		}
 	}
 }
 

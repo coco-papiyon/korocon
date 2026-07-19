@@ -51,6 +51,15 @@ func runConfig(args []string, in io.Reader, out, stderr io.Writer) error {
 		}
 		_, err = fmt.Fprintf(out, "モデル設定を保存しました。\nconfig: %s\n", path)
 		return err
+	case "list":
+		if len(args) != 1 {
+			return errors.New("config list does not accept arguments")
+		}
+		configured, path, err := appconfig.Load()
+		if err != nil {
+			return err
+		}
+		return printConfigList(out, path, configured)
 	case "allow":
 		configured, path, err := appconfig.Load()
 		if err != nil {
@@ -68,6 +77,49 @@ func runConfig(args []string, in io.Reader, out, stderr io.Writer) error {
 	default:
 		return fmt.Errorf("unknown config command %q (try 'korocon config help')", args[0])
 	}
+}
+
+func printConfigList(out io.Writer, path string, configured appconfig.Config) error {
+	if _, err := fmt.Fprintf(out, "設定一覧\nconfig: %s\n\n", path); err != nil {
+		return err
+	}
+	values := []struct {
+		name  string
+		value string
+	}{
+		{"workspaceName", configured.WorkspaceName},
+		{"baseBranch", configured.BaseBranch},
+		{"branchNamePattern", configured.BranchNamePattern},
+		{"implementationDirectory", configured.ImplementationDirectory},
+		{"implementationLoopCount", fmt.Sprint(configured.ImplementationLoopCount)},
+		{"autoPollingInterval", configured.AutoPollingInterval},
+		{"startupCommand", configured.StartupCommand},
+		{"implementerProvider", configured.ImplementerProvider},
+		{"implementerModel", configured.ImplementerModel},
+		{"verifierProvider", configured.VerifierProvider},
+		{"verifierModel", configured.VerifierModel},
+		{"reviewerProvider", configured.ReviewerProvider},
+		{"reviewerModel", configured.ReviewerModel},
+		{"reviewer", configured.Reviewer},
+	}
+	for _, item := range values {
+		value := item.value
+		if strings.TrimSpace(value) == "" {
+			value = "(未設定)"
+		}
+		if _, err := fmt.Fprintf(out, "%s: %s\n", item.name, value); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintln(out, "builtinAllowedCommands:"); err != nil {
+		return err
+	}
+	for _, command := range configured.BuiltinAllowedCommands {
+		if _, err := fmt.Fprintf(out, "  - %s\n", command); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func addBuiltinAllowedCommand(configured appconfig.Config, path, command string, out io.Writer) error {
@@ -308,11 +360,13 @@ func readConfigLine(reader *bufio.Reader, out io.Writer, prompt string) (string,
 func printConfigUsage(out io.Writer) {
 	fmt.Fprint(out, `Usage:
   korocon config init [--force]
+  korocon config list
   korocon config model
   korocon config allow [COMMAND]
 
 Commands:
   init   interactively create config.json
+  list   display all settings
   model  interactively update provider and model settings
   allow  add a command to builtinAllowedCommands
 `)

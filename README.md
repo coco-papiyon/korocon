@@ -2,15 +2,17 @@
 
 Go から OpenAI Codex CLI などの AI CLI を起動するための薄いオーケストレーターです。
 
-OpenAI Codex CLIとGitHub CLI (`gh`)のインストール・ログインが必要です。
+利用するProviderに応じてOpenAI Codex CLIまたはGitHub Copilot CLIをインストールし、ログインしてください。GitHub操作にはGitHub CLI (`gh`)も必要です。
 
-CLIを起動するとCodexを常駐プロセスとして1回だけ起動し、入力待ちになります。標準入力から受けた指示は同じCodexセッションへ順番に送り、最終結果を画面に表示します。JSONイベントと標準エラーは`korocon.log`へ追記します。Ctrl+CでCLIとCodexを停止します。
+CLIを起動すると選択したAI CLIを常駐プロセスとして1回だけ起動し、入力待ちになります。Codexはapp-server、CopilotはACPサーバーを使用し、標準入力から受けた指示を同じセッションへJSONLで順番に送ります。Copilotはセッション作成直後に`/ide`を実行してVS Code連携を有効化します。JSONイベントと標準エラーは`korocon.log`へ追記し、Ctrl+CでCLIとAIを停止します。
 
 各ジョブの開始前に対象リポジトリで`git fetch --prune origin`と`git pull --ff-only`を実行します。同期に失敗した場合はAIジョブを開始せず、エラーを表示します。
 
-設定は実行バイナリと同じディレクトリの`config.json`から読み込みます。`workspaceName`で成果物ディレクトリ名、`builtinAllowedCommands`でCodexの自動承認対象コマンドを指定します。
+設定は実行バイナリと同じディレクトリの`config.json`から読み込みます。`workspaceName`で成果物ディレクトリ名、`builtinAllowedCommands`でAIの自動承認対象コマンドを指定します。
 
-`korocon config init`で設定ファイルを対話作成できます。`baseBranch`、`branchNamePattern`、`startupCommand`を入力し、空入力では既定値を使用します。続けて実装者・検証者・レビューアのProviderとModelを設定します。Model候補は選択したProviderごとに表示し、Copilotでは`auto`を選択できます。既存ファイルを再初期化する場合は`--force`を指定します。モデル設定だけを変更する場合は`korocon config model`を使用します。
+`korocon config init`で設定ファイルを対話作成できます。`baseBranch`、`branchNamePattern`、`startupCommand`を入力し、空入力では既定値を使用します。続けて実装者・検証者・レビューアのProviderとModelを設定します。Copilotでは`auto`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5-mini`、`cloade-sonnet-4.6`、`claude-opus-4.6`を選択でき、既定値は`auto`です。既存ファイルを再初期化する場合は`--force`を指定します。モデル設定だけを変更する場合は`korocon config model`を使用します。
+
+設定一覧は`korocon config list`で表示できます。
 
 ```sh
 korocon config init
@@ -61,7 +63,7 @@ go run ./cmd/korocon -i --auto
 go run ./cmd/korocon -r --auto
 ```
 
-`--assigne <ユーザー名>`でIssue/PRの担当者を指定できます。省略時は`gh api user --jq .login`の現在ユーザーを使用し、空白指定時は担当者フィルタを無効にします。
+`--assignee <ユーザー名>`でIssue/PRの担当者を指定できます。省略時は`gh api user --jq .login`の現在ユーザーを使用し、空白指定時は担当者フィルタを無効にします。
 
 追加フィルタとして、`--label`、`--exclude-label`、`--title`、`--author`、`--search`を使用できます。ラベル、除外ラベル、タイトル、作成者は複数回指定できます。GitHub Projects v2で絞り込む場合は、`--project <番号>`、`--project-owner <owner>`、`--project-status <Status>`を指定します。Status以外のProjectフィールドには`--project-query`を使用できます。
 
@@ -150,9 +152,9 @@ Ctrl+Cまたは`exit`の入力で、実行中のAIを停止してCLIを終了し
 
 起動すると `> ` が表示され、テキスト入力を受け付けます。指示を入力すると、実行中のジョブにプロバイダーとモデルを併記した `[job 1] 実行中...` が表示され、完了時にその行が消えて`[job 1] 完了`へ置き換わり、その下に結果が表示されます。
 
-入力の先頭に `/` を付けるとコマンドを実行できます。`/model` で選択可能なモデルを表示し、`/model 2` または `/model gpt-5.6-terra` のように入力すると、常駐中のCodexへモデル変更を送信して次のターンから切り替えます。先頭に空白などがある `/model` は通常のプロンプトとして扱われます。
+入力の先頭に `/` を付けるとコマンドを実行できます。`/model` で選択可能なモデルを表示し、`/model 2` または `/model gpt-5.6-terra` のように入力すると、常駐中のAIへモデル変更を送信して次のターンから切り替えます。先頭に空白などがある `/model` は通常のプロンプトとして扱われます。
 
-Codexが操作の承認を要求した場合は内容を画面に表示します。未入力Enterまたは`/approve`で承認、`/allow`で承認して`config.json`へ自動承認コマンドを追加、`/decline`で拒否します。
+AIが操作の承認を要求した場合は内容を画面に表示します。未入力Enterまたは`/approve`で承認、`/allow`で承認して`config.json`へ自動承認コマンドを追加、`/decline`で拒否します。
 
 直前に完了したジョブの修正差分は`/diff`で表示できます。`/diff ファイル名`と入力すると、差分を作業ディレクトリのファイルへ保存します。
 
@@ -166,7 +168,7 @@ go run ./cmd/korocon --dir .
 printf 'pr\nこのリポジトリの構成を説明して\n' | go run ./cmd/korocon
 ```
 
-Linuxでは通常のフォアグラウンドCLIとして起動します。Codexはバックグラウンドの常駐`app-server`として動き、入力は標準入力のJSONLで同じthreadへ渡されます。`workspace-write` sandboxは維持したまま、GitHub APIなどへ接続できるよう`network_access=true`を明示します。
+Linuxでは通常のフォアグラウンドCLIとして起動します。AIはバックグラウンドに常駐し、入力は標準入出力のJSONLで同じ会話へ渡されます。Codexでは`workspace-write` sandboxを維持したまま、GitHub APIなどへ接続できるよう`network_access=true`を明示します。Copilotでは`copilot --acp --stdio`を起動します。
 
 ```sh
 printf '%s\n' 'このリポジトリの構成を説明して' | go run ./cmd/korocon

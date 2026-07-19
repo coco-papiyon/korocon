@@ -79,6 +79,36 @@ func TestLoadFileReadsRoleAISettings(t *testing.T) {
 	}
 }
 
+func TestLoadFileDefaultsCopilotModelsToAuto(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	content := []byte(`{"implementerProvider":"copilot","verifierProvider":"copilot","reviewerProvider":"copilot"}`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configured, err := loadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured.ImplementerModel != "auto" || configured.VerifierModel != "auto" || configured.ReviewerModel != "auto" {
+		t.Fatalf("Copilot model defaults = %+v", configured)
+	}
+}
+
+func TestLoadFileConvertsCodexDefaultForCopilotToAuto(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	content := []byte(`{"implementerProvider":"copilot","implementerModel":"gpt-5.6-luna","verifierProvider":"copilot","verifierModel":"gpt-5.6-luna","reviewerProvider":"copilot","reviewerModel":"gpt-5.6-luna"}`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configured, err := loadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured.ImplementerModel != "auto" || configured.VerifierModel != "auto" || configured.ReviewerModel != "auto" {
+		t.Fatalf("converted Copilot models = %+v", configured)
+	}
+}
+
 func TestLoadFileReadsPullRequestReviewer(t *testing.T) {
 	path := filepath.Join(t.TempDir(), FileName)
 	if err := os.WriteFile(path, []byte(`{"reviewer":" octocat "}`), 0o600); err != nil {

@@ -14,6 +14,37 @@ import (
 	"github.com/coco-papiyon/korocon/internal/runner"
 )
 
+type fakeDaemonSession struct {
+	model string
+}
+
+func (s *fakeDaemonSession) RunTurn(_ context.Context, prompt, model string, onEvent func()) (runner.TurnResult, error) {
+	if model != "" {
+		s.model = model
+	}
+	if onEvent != nil {
+		onEvent()
+	}
+	return runner.TurnResult{Text: strings.TrimSpace("-p " + prompt + " --model " + s.model)}, nil
+}
+
+func (s *fakeDaemonSession) SetModel(_ context.Context, model string) error {
+	s.model = model
+	return nil
+}
+
+func (s *fakeDaemonSession) Close() error { return nil }
+
+func TestMain(m *testing.M) {
+	oldStart := startDaemonSession
+	startDaemonSession = func(_ context.Context, cfg runner.SessionConfig) (runner.AgentSession, error) {
+		return &fakeDaemonSession{model: cfg.Model}, nil
+	}
+	code := m.Run()
+	startDaemonSession = oldStart
+	os.Exit(code)
+}
+
 func TestJSONResultWriterDisplaysFinalAgentMessage(t *testing.T) {
 	var log, result bytes.Buffer
 	w := jsonResultWriter{log: &log, result: &result}
@@ -340,9 +371,10 @@ func TestRunModelCommandListsAndSwitchesModelByName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(status.String(), "1  gpt-5.6-sol") ||
-		!strings.Contains(status.String(), "2  gpt-5.6-terra") ||
-		!strings.Contains(status.String(), "3* gpt-5.6-luna") ||
+	if !strings.Contains(status.String(), "1  auto") ||
+		!strings.Contains(status.String(), "2  gpt-5.6-sol") ||
+		!strings.Contains(status.String(), "3  gpt-5.6-terra") ||
+		!strings.Contains(status.String(), "4* gpt-5.6-luna") ||
 		!strings.Contains(status.String(), "モデルを gpt-5.6-terra に切り替えました") {
 		t.Fatalf("unexpected model command output: %q", status.String())
 	}

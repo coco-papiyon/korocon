@@ -19,7 +19,9 @@ go build -o ./korocon ./cmd/korocon
 
 `korocon`は実行バイナリと同じディレクトリにある`config.json`を読み込みます。ファイルが存在しない場合は既定値を使用します。`go run`では一時ディレクトリに実行バイナリが作られるため、設定ファイルを利用するときはビルドしたバイナリを起動してください。
 
-設定ファイルは`korocon config init`で対話作成できます。`baseBranch`、`branchNamePattern`、`startupCommand`の順に入力し、未入力状態でEnterを押すと画面に表示された既定値を使用します。その後、`korocon config model`と同じモデル設定へ進み、実装者・検証者・レビューアのProviderとModelを入力します。Model候補は選択したProviderごとに表示し、CodexではCodex用モデル、Copilotでは`auto`を表示します。Copilotの具体的なモデル名は直接入力できます。検証者とレビューアは`inherit`で実装者と同じ設定にできます。
+設定ファイルは`korocon config init`で対話作成できます。`baseBranch`、`branchNamePattern`、`startupCommand`の順に入力し、未入力状態でEnterを押すと画面に表示された既定値を使用します。その後、`korocon config model`と同じモデル設定へ進み、実装者・検証者・レビューアのProviderとModelを入力します。Model候補は選択したProviderごとに表示します。Copilotでは`auto`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5-mini`、`cloade-sonnet-4.6`、`claude-opus-4.6`を選択でき、既定値は`auto`です。検証者とレビューアは`inherit`で実装者と同じ設定にできます。
+
+設定一覧は`korocon config list`で表示できます。
 
 ```sh
 korocon config init
@@ -92,7 +94,7 @@ cat prompt.md | go run ./cmd/korocon
 
 ## 対話型CLIとしての実行
 
-`korocon`は起動時に`codex --config sandbox_workspace_write.network_access=true app-server --stdio`を1回だけ起動してから標準入力を待機します。`workspace-write` sandboxと承認制御を維持しながら、CodexがGitHub APIなどへ接続できるようネットワークアクセスを許可します。各入力を同じCodex threadへ順番に送り、AIの最終結果を画面に表示します。通常時の空行は送信しませんが、Issueの承認待ちでは空行を承認として扱います。CodexのJSONイベントと標準エラーはログファイルへリアルタイム追記します。
+`korocon`は起動時に選択Providerを1回だけ起動してから標準入力を待機します。Codexは`codex --config sandbox_workspace_write.network_access=true app-server --stdio`、Copilotは`copilot --acp --stdio --model <model>`で起動します。CopilotにはACPセッション作成直後に`/ide`を送り、以後の指示も同じACPセッションへNDJSONで送ります。各入力を同じ会話へ順番に送り、AIの最終結果を画面に表示します。通常時の空行は送信しませんが、Issueの承認待ちでは空行を承認として扱います。JSONイベントと標準エラーはログファイルへリアルタイム追記します。
 
 CLI自身の論理メッセージは、AI本文と区別するため`---`の後に各行`[システム] `を付けて表示します。`[job N]`や`[承認待ち]`など既に明確な状態表示には二重の接頭辞を付けず、区切り線も連続させません。AI本文は変更せず、入力プロンプトは従来どおり`> `です。
 
@@ -129,7 +131,7 @@ korocon -r --auto --project 3 --project-status "Ready"
 
 `--auto`は`--implementer`または`--reviewer`が必要で、`--issue`、`--pr`とは同時指定できません。
 
-`--assigne <ユーザー名>`でIssueとPRの担当者を指定できます。省略時は`gh api user --jq .login`で取得した現在のGitHubユーザーを使用します。`--assigne ""`のように空白を指定した場合は担当者フィルタを無効にします。
+`--assignee <ユーザー名>`でIssueとPRの担当者を指定できます。省略時は`gh api user --jq .login`で取得した現在のGitHubユーザーを使用します。`--assignee ""`のように空白を指定した場合は担当者フィルタを無効にします。
 
 次の追加フィルタを指定できます。
 
@@ -230,7 +232,7 @@ git -C <repository> worktree add -B <branchName> ../<repositoryName>-branches/<r
 
 worktreeパスがすでに存在する場合は作成コマンドを実行せず、そのディレクトリを利用します。
 
-設計用Codexは設計承認まで常駐し、実装開始時に停止します。その後、同じworktreeを作業ディレクトリとする2つのCodex app-serverを起動します。
+設計用AIは設計承認まで常駐し、実装開始時に停止します。その後、同じworktreeを作業ディレクトリとする実装用・検証用の2つの常駐AIセッションを起動します。
 
 1. 実装用Codexが承認済み設計に従って実装とテストを行う
 2. 検証用Codexが読み取り専用sandboxで設計、差分、テスト結果を検証する
@@ -271,7 +273,7 @@ Codexへ渡す内容は「設計または実装を行う」という工程指示
 
 起動時は入力欄の上に主要設定をAI・GitHub・Workflowのグループに分けて表示し、その下に入力待ちの`> `が表示されます。AI設定は`Provider / Model / 実行バイナリ`形式で、実装者と同じ設定の検証者・レビューアは省略されます。設定ファイル、workspace名、実装ディレクトリ、ループ回数、自動承認コマンド数、ログファイルなどの詳細設定は起動時には表示しません。
 
-入力の先頭が `/` の行はコマンドとして扱われます。`/model` で選択可能なモデルを表示し、`/model 1` のように番号、または`/model gpt-5.6-terra` のようにモデル名を指定して切り替えます。koroconは常駐中のCodexへ`/model`相当のモデル変更要求を標準入力で送信し、Codexの成功応答後に表示中のモデルを更新します。選択したモデルは次のターンから同じthreadへ適用されます。先頭に空白がある行はコマンドではなくプロンプトです。
+入力の先頭が `/` の行はコマンドとして扱われます。`/model` で選択可能なモデルを表示し、番号またはモデル名を指定して切り替えます。Codexには`thread/settings/update`、CopilotにはACPの`session/prompt`で`/model <モデル名>`を送り、成功応答後に表示中のモデルを更新します。プロセスと会話セッションは再起動しません。
 
 Codexがコマンド実行を要求した場合、`builtinAllowedCommands`に一致するコマンドは自動承認し、`[自動承認]`と対象を表示します。完全一致のほか、安全な引数やLinuxの安全な環境変数代入を付けた実行とCodexが提示する`proposedExecpolicyAmendment`、`commandActions`を判定します。`;`、`&&`、パイプ、コマンド置換などを含む複合実行は、許可コマンドから始まっていても自動承認しません。
 
@@ -301,14 +303,14 @@ Codexの使用量イベントを受け取った場合、完了メッセージに
 
 ログファイルは`--log-file`で変更できます。デフォルトは`korocon.log`で、既存ファイルには追記します。ファイル権限は所有者のみ読み書き可能です。`--stream-logs=false`の場合も、完了した結果は画面に表示します。
 
-Ctrl+Cを押すとCLIを終了し、常駐Codexプロセスと実行中のターンもキャンセルします。
+Ctrl+Cを押すとCLIを終了し、常駐AIプロセスと実行中のターンもキャンセルします。
 `exit`と入力してEnterを押した場合も同様に終了します。
 
 `--stream-logs`を指定すると、AI CLIの標準出力と標準エラーを実行中にログファイルへリアルタイム追記します。試験期間中は実装上のデフォルトがONですが、正式仕様ではデフォルトOFFに変更予定です。明示的に停止する場合は`--stream-logs=false`を指定してください。
 
 端末での入力中は、`Shift+Enter`で改行、`Enter`でAIへ送信します。左右矢印で文字位置を移動し、上下矢印で入力行を移動できます。最上段より上へは移動せず、移動先が短い行の場合は行末へ移動します。
 
-SIGINTまたはSIGTERMを受けると、新規入力の受付を停止し、常駐Codexプロセスを終了します。
+SIGINTまたはSIGTERMを受けると、新規入力の受付を停止し、常駐AIプロセスを終了します。
 
 ```sh
 go build -o ./korocon ./cmd/korocon
@@ -320,4 +322,4 @@ go build -o ./korocon ./cmd/korocon
 
 実装者のデフォルトProviderは`codex`、Modelは`gpt-5.6-luna`です。検証者とレビューアは、個別指定がなければ実装者と同じProvider・Modelを使用します。既存の`--provider`と`--model`は実装者設定を変更します。CLIの実行ファイル名は`--binary`で変更できます。コマンドはシェルを経由せず、引数を分離したまま起動します。
 
-Codexは`--config sandbox_workspace_write.network_access=true app-server --stdio`で起動し、threadには`workspace-write` sandboxと`on-request`承認ポリシーを設定します。ネットワークだけを明示的に許可し、危険な全自動実行フラグは使用しません。Copilotは役割別Providerへ`copilot`を指定します。
+Codexは`--config sandbox_workspace_write.network_access=true app-server --stdio`、Copilotは`--acp --stdio --model <model>`で常駐起動します。CopilotのACP `session/request_permission`は既存の自動承認・手動承認へ変換します。危険な全自動実行フラグはどちらにも使用しません。

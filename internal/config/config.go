@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -108,13 +109,25 @@ func loadFile(path string) (Config, error) {
 	}
 	defer file.Close()
 
-	decoder := json.NewDecoder(file)
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return Config{}, fmt.Errorf("read config %q: %w", path, err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&configured); err != nil {
 		return Config{}, fmt.Errorf("decode config %q: %w", path, err)
 	}
 	if err := ensureJSONEnd(decoder); err != nil {
 		return Config{}, fmt.Errorf("decode config %q: %w", path, err)
+	}
+	var specified struct {
+		ImplementerModel *string `json:"implementerModel"`
+		VerifierModel    *string `json:"verifierModel"`
+		ReviewerModel    *string `json:"reviewerModel"`
+	}
+	if err := json.Unmarshal(data, &specified); err != nil {
+		return Config{}, fmt.Errorf("decode config model fields %q: %w", path, err)
 	}
 	configured.WorkspaceName = strings.TrimSpace(configured.WorkspaceName)
 	if err := validateWorkspaceName(configured.WorkspaceName); err != nil {
@@ -156,21 +169,34 @@ func loadFile(path string) (Config, error) {
 		return Config{}, fmt.Errorf("config implementerProvider: %w", err)
 	}
 	configured.ImplementerModel = strings.TrimSpace(configured.ImplementerModel)
-	if configured.ImplementerModel == "" {
-		configured.ImplementerModel = "gpt-5.6-luna"
+	if configured.ImplementerModel == "" || (configured.ImplementerProvider == "copilot" && (specified.ImplementerModel == nil || strings.TrimSpace(*specified.ImplementerModel) == "" || strings.EqualFold(configured.ImplementerModel, "gpt-5.6-luna"))) {
+		configured.ImplementerModel = modelDefaultForProvider(configured.ImplementerProvider)
 	}
 	configured.VerifierProvider, err = normalizeProvider(configured.VerifierProvider, "")
 	if err != nil {
 		return Config{}, fmt.Errorf("config verifierProvider: %w", err)
 	}
 	configured.VerifierModel = strings.TrimSpace(configured.VerifierModel)
+	if configured.VerifierProvider == "copilot" && (configured.VerifierModel == "" || specified.VerifierModel == nil || strings.TrimSpace(*specified.VerifierModel) == "" || strings.EqualFold(configured.VerifierModel, "gpt-5.6-luna")) {
+		configured.VerifierModel = "auto"
+	}
 	configured.ReviewerProvider, err = normalizeProvider(configured.ReviewerProvider, "")
 	if err != nil {
 		return Config{}, fmt.Errorf("config reviewerProvider: %w", err)
 	}
 	configured.ReviewerModel = strings.TrimSpace(configured.ReviewerModel)
+	if configured.ReviewerProvider == "copilot" && (configured.ReviewerModel == "" || specified.ReviewerModel == nil || strings.TrimSpace(*specified.ReviewerModel) == "" || strings.EqualFold(configured.ReviewerModel, "gpt-5.6-luna")) {
+		configured.ReviewerModel = "auto"
+	}
 	configured.Reviewer = strings.TrimSpace(configured.Reviewer)
 	return configured, nil
+}
+
+func modelDefaultForProvider(provider string) string {
+	if provider == "copilot" {
+		return "auto"
+	}
+	return "gpt-5.6-luna"
 }
 
 func normalizeProvider(value, fallback string) (string, error) {
