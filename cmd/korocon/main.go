@@ -790,7 +790,7 @@ func selectAutoGitHubInformation(ctx context.Context, out io.Writer, workingDir,
 			return nil, nil, fmt.Errorf("Issue一覧の取得に失敗しました: %w", err)
 		}
 		issues = slices.DeleteFunc(issues, func(issue issueworkflow.Issue) bool {
-			return !issueIsImplementerTarget(issue) || !assignedTo(issue.Assignees, assigneeFilter) || !matchesIssueFilters(issue, filters)
+			return issueIsRunning(issue) || !issueIsImplementerTarget(issue) || !assignedTo(issue.Assignees, assigneeFilter) || !matchesIssueFilters(issue, filters)
 		})
 		if len(issues) > 0 {
 			sort.Slice(issues, func(i, j int) bool { return issues[i].Number > issues[j].Number })
@@ -807,7 +807,7 @@ func selectAutoGitHubInformation(ctx context.Context, out io.Writer, workingDir,
 		return nil, nil, fmt.Errorf("PR一覧の取得に失敗しました: %w", err)
 	}
 	prs = slices.DeleteFunc(prs, func(pr prworkflow.PullRequest) bool {
-		return strings.EqualFold(strings.TrimSpace(pr.State), "MERGED") || pr.IsDraft || !pullRequestIsRoleTarget(pr, mode) || !assignedToPR(pr.Assignees, assigneeFilter) || !matchesPullRequestFilters(pr, filters)
+		return pullRequestIsRunning(pr) || strings.EqualFold(strings.TrimSpace(pr.State), "MERGED") || pr.IsDraft || !pullRequestIsRoleTarget(pr, mode) || !assignedToPR(pr.Assignees, assigneeFilter) || !matchesPullRequestFilters(pr, filters)
 	})
 	if len(prs) == 0 {
 		return nil, nil, errNoAutoTargets
@@ -956,6 +956,16 @@ func issueIsImplementerTarget(issue issueworkflow.Issue) bool {
 		}
 	}
 	return true
+}
+
+func issueIsRunning(issue issueworkflow.Issue) bool {
+	for _, label := range issue.Labels {
+		switch strings.ToLower(strings.TrimSpace(label.Name)) {
+		case "state:design_running", "state:implementation_running":
+			return true
+		}
+	}
+	return false
 }
 
 func issueStatus(issue issueworkflow.Issue) string {
@@ -1263,6 +1273,16 @@ func pullRequestIsRoleTarget(pr prworkflow.PullRequest, mode selectionMode) bool
 	default:
 		return true
 	}
+}
+
+func pullRequestIsRunning(pr prworkflow.PullRequest) bool {
+	for _, label := range pr.Labels {
+		switch strings.ToLower(strings.TrimSpace(label.Name)) {
+		case "state:review_running", "state:review_fix_design_running", "state:review_fix_implementation_running", "state:pr_conflict_running":
+			return true
+		}
+	}
+	return false
 }
 
 func pullRequestHasStateLabel(pr prworkflow.PullRequest) bool {

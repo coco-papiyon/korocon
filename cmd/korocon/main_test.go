@@ -222,6 +222,25 @@ func TestRoleSelectionTargets(t *testing.T) {
 	}
 }
 
+func TestAutoSelectionExcludesRunningTargets(t *testing.T) {
+	runningIssue := issueworkflow.Issue{Labels: []issueworkflow.Label{{Name: "state:implementation_running"}}}
+	if !issueIsImplementerTarget(runningIssue) || !issueIsRunning(runningIssue) {
+		t.Fatal("running issue should be recognized as an implementer target but excluded from auto mode")
+	}
+	readyIssue := issueworkflow.Issue{Labels: []issueworkflow.Label{{Name: "state:design_approved"}}}
+	if issueIsRunning(readyIssue) {
+		t.Fatal("non-running issue was classified as running")
+	}
+	runningPR := prworkflow.PullRequest{Labels: []prworkflow.Label{{Name: "state:review_fix_implementation_running"}}}
+	if !pullRequestIsRunning(runningPR) {
+		t.Fatal("running PR was not recognized")
+	}
+	readyPR := prworkflow.PullRequest{Labels: []prworkflow.Label{{Name: "state:review_fix_implementation_ready"}}}
+	if pullRequestIsRunning(readyPR) {
+		t.Fatal("non-running PR was classified as running")
+	}
+}
+
 func TestGitHubSelectionFilters(t *testing.T) {
 	filters := githubSelectionFilters{
 		LabelIncludes: []string{"bug", "backend"},
