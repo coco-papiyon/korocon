@@ -330,11 +330,12 @@ func TestRunKeepsPhaseHistoryWhenPhaseFails(t *testing.T) {
 
 func TestRunModelCommandListsAndSwitchesModelByName(t *testing.T) {
 	var out, status strings.Builder
+	display := NewSystemOutput(&status)
 	err := Run(context.Background(), strings.NewReader("/model\n/model gpt-5.6-terra\nfirst\n"), &out, Config{
 		Provider:  "copilot",
 		Binary:    "/bin/echo",
 		Model:     "gpt-5.6-luna",
-		StatusOut: &status,
+		StatusOut: display,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -345,8 +346,25 @@ func TestRunModelCommandListsAndSwitchesModelByName(t *testing.T) {
 		!strings.Contains(status.String(), "モデルを gpt-5.6-terra に切り替えました") {
 		t.Fatalf("unexpected model command output: %q", status.String())
 	}
+	if !strings.Contains(status.String(), "---\n[システム] モデルを gpt-5.6-terra に切り替えました。") {
+		t.Fatalf("model switch was not formatted as a system message: %q", status.String())
+	}
 	if strings.Contains(out.String(), "/model") || !strings.Contains(out.String(), "--model gpt-5.6-terra") {
 		t.Fatalf("selected model was not used for the next prompt: %q", out.String())
+	}
+}
+
+func TestRunModelCommandRejectsUnavailableModelAsSystemMessage(t *testing.T) {
+	var out, status strings.Builder
+	display := NewSystemOutput(&status)
+	err := Run(context.Background(), strings.NewReader("/model unavailable\n"), &out, Config{
+		Provider: "copilot", Binary: "/bin/echo", StatusOut: display,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := status.String(); !strings.Contains(got, "---\n[システム] 利用できないモデルです: unavailable") {
+		t.Fatalf("unavailable model was not formatted as a system message: %q", got)
 	}
 }
 

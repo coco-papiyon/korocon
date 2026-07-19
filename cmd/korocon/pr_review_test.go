@@ -277,7 +277,7 @@ func TestPRReviewApprovalWithoutStartupCommandAllowsEmptyURL(t *testing.T) {
 	controller := newPRReviewController(workflow, &out, nil, nil, nil, nil, nil)
 	completePRJob(t, controller, workflow.Prompt(), "review result")
 	action, err := controller.HandleInput(context.Background(), "approve")
-	if err != nil || !action.Handled || !action.Restart || !strings.Contains(out.String(), "PR URL: \n") {
+	if err != nil || !action.Handled || !action.Restart || !strings.Contains(out.String(), "[システム] PR URL:") {
 		t.Fatalf("action=%+v output=%q err=%v", action, out.String(), err)
 	}
 }

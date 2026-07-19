@@ -81,12 +81,12 @@ func TestIssueReviewApprovesEmptyInput(t *testing.T) {
 	if !action.Handled || action.Job == nil || workflow.phase != issueworkflow.PhaseImplementation || workflow.approvedWith != "design result" || len(workflow.savedResults) != 1 {
 		t.Fatalf("action=%+v approvedWith=%q", action, workflow.approvedWith)
 	}
-	if !strings.Contains(out.String(), "\n\n---\n\n設計結果を保存しました: .workspace/design/1_design.md") ||
+	if !strings.Contains(out.String(), "---\n[システム] Issue #2の設計を開始します。\n[システム] 設計結果を保存しました: .workspace/design/1_design.md") ||
 		!strings.Contains(out.String(), "設計が完了しました。承認する場合は未入力状態でEnter、もしくは承認、approve、aのいずれかを入力してください。") ||
 		!strings.Contains(out.String(), "設計を承認しました") {
 		t.Fatalf("unexpected output: %q", out.String())
 	}
-	if strings.Count(out.String(), "Issue #2の設計を開始します。\n---\n") != 1 {
+	if strings.Count(out.String(), "---\n[システム] Issue #2の設計を開始します。") != 1 {
 		t.Fatalf("unexpected design start message: %q", out.String())
 	}
 	if strings.Contains(out.String(), "Issue #2の実装を開始します。") {
@@ -145,7 +145,7 @@ func TestIssueReviewImplementationApprovalClosesSessions(t *testing.T) {
 	if !strings.Contains(out.String(), "PRを作成しました: https://github.com/acme/repo/pull/1") {
 		t.Fatalf("unexpected output: %q", out.String())
 	}
-	if strings.Count(out.String(), "Issue #2の実装を開始します。\n---\n") != 1 {
+	if strings.Count(out.String(), "---\n[システム] Issue #2の実装を開始します。") != 1 {
 		t.Fatalf("unexpected implementation start message: %q", out.String())
 	}
 }
@@ -205,7 +205,7 @@ func TestIssueReviewFeedbackStartsTrackedRevision(t *testing.T) {
 	if !strings.Contains(out.String(), "再実装") {
 		t.Fatalf("unexpected output: %q", out.String())
 	}
-	if strings.Count(out.String(), "Issue #2の実装を開始します。\n---\n") != 2 {
+	if strings.Count(out.String(), "[システム] Issue #2の実装を開始します。") != 2 {
 		t.Fatalf("unexpected implementation start messages: %q", out.String())
 	}
 }

@@ -57,7 +57,7 @@ func newIssueReviewController(workflow reviewWorkflow, phase issueworkflow.Phase
 	c := &issueReviewController{
 		workflow:            workflow,
 		phase:               phase,
-		out:                 out,
+		out:                 daemon.NewSystemMessageWriter(out),
 		prompts:             make(map[string]int),
 		jobs:                make(map[uint64]struct{}),
 		implementationJob:   implementationJob,
@@ -129,7 +129,7 @@ func (c *issueReviewController) OnJobStart(ctx context.Context, id uint64, promp
 		return err
 	}
 	phase, _ := c.phaseNames()
-	if _, err := fmt.Fprintf(c.out, "Issue #%dの%sを開始します。\n---\n", c.workflow.IssueNumber(), phase); err != nil {
+	if _, err := fmt.Fprintf(c.out, "Issue #%dの%sを開始します。", c.workflow.IssueNumber(), phase); err != nil {
 		c.mu.Lock()
 		delete(c.jobs, id)
 		c.prompts[prompt]++
@@ -186,7 +186,7 @@ func (c *issueReviewController) OnJobFinish(ctx context.Context, id uint64, prom
 	c.result = result
 	phase, revision := c.phaseNames()
 	_, err := fmt.Fprintf(c.out,
-		"\n\n---\n\n%s結果を保存しました: %s\n%sが完了しました。承認する場合は未入力状態でEnter、もしくは承認、approve、aのいずれかを入力してください。\n修正する場合は内容を入力してください。AIへ送信して%sします。\n",
+		"%s結果を保存しました: %s\n%sが完了しました。承認する場合は未入力状態でEnter、もしくは承認、approve、aのいずれかを入力してください。\n修正する場合は内容を入力してください。AIへ送信して%sします。",
 		phase, artifactPath, phase, revision)
 	c.mu.Unlock()
 	return err

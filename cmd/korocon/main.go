@@ -272,6 +272,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 		autoInput = newAutoPollingInput(selectionInput)
 		selectionInput = autoInput
 	}
+	selectionDisplay := daemon.NewSystemOutput(stdout)
 	requested := requestedGitHubInformation{issueSpecified: issueSpecified, issueNumber: *issueNumber, prSpecified: prSpecified, prNumber: *prNumber}
 	for {
 		activeFilters := filters
@@ -286,7 +287,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 		var selectedPR *prworkflow.Workflow
 		var err error
 		if *autoMode {
-			selectedIssue, selectedPR, err = selectAutoGitHubInformation(ctx, stdout, *dir, configured.WorkspaceName, mode, assigneeFilter, activeFilters)
+			selectedIssue, selectedPR, err = selectAutoGitHubInformation(ctx, selectionDisplay, *dir, configured.WorkspaceName, mode, assigneeFilter, activeFilters)
 			if errors.Is(err, errNoAutoTargets) {
 				if waitErr := waitForAutoPolling(ctx, stdout, configured.AutoPollingInterval, autoPollingInterval, autoInput); waitErr != nil {
 					if errors.Is(waitErr, context.Canceled) {
@@ -297,7 +298,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 				continue
 			}
 		} else if requested.issueSpecified || requested.prSpecified {
-			selectedIssue, selectedPR, err = selectRequestedGitHubInformationWithFilters(ctx, stdout, *dir, configured.WorkspaceName, requested, assigneeFilter, activeFilters)
+			selectedIssue, selectedPR, err = selectRequestedGitHubInformationWithFilters(ctx, selectionDisplay, *dir, configured.WorkspaceName, requested, assigneeFilter, activeFilters)
 			requested = requestedGitHubInformation{}
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
@@ -309,7 +310,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 				continue
 			}
 		} else {
-			startupInput, selectedIssue, selectedPR, err = selectGitHubInformation(ctx, selectionInput, stdout, *dir, configured.WorkspaceName, mode, assigneeFilter, activeFilters)
+			startupInput, selectedIssue, selectedPR, err = selectGitHubInformation(ctx, selectionInput, selectionDisplay, *dir, configured.WorkspaceName, mode, assigneeFilter, activeFilters)
 		}
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -329,6 +330,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 			var prController *prReviewController
 			var fixEngine *prworkflow.FixEngine
 			var runtimeCommand *prworkflow.RuntimeCommand
+			displayOut := daemon.NewSystemOutput(stderr)
 			if selectedIssue != nil {
 				implementationEngine = implementation.New(implementation.Config{
 					Provider: implementer.Provider, Binary: implementer.Binary,
@@ -351,7 +353,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 						},
 					}
 				}
-				review = newIssueReviewController(selectedIssue, selectedIssue.Phase, stderr, implementationJob, implementationEngine.Close)
+				review = newIssueReviewController(selectedIssue, selectedIssue.Phase, displayOut, implementationJob, implementationEngine.Close)
 				review.SetResetImplementation(implementationEngine.Reset)
 				if selectedIssue.Phase == issueworkflow.PhaseImplementation {
 					initialJob = review.InitialJob()
@@ -365,7 +367,10 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 					if err != nil {
 						return fmt.Errorf("レビュー指摘内容の取得に失敗しました: %w", err)
 					}
-					if _, err := fmt.Fprintf(stderr, "\n---\n\n%s\n保存先: %s\n\nレビュー指摘内容を確認してください。すべて修正する場合は未入力状態でEnter、修正対象を選ぶ場合は修正する指摘と修正不要な指摘を入力してください。\n", strings.TrimSpace(feedback), feedbackPath); err != nil {
+					if _, err := fmt.Fprintf(displayOut, "%s\n", strings.TrimSpace(feedback)); err != nil {
+						return err
+					}
+					if err := daemon.SystemMessage(displayOut, fmt.Sprintf("保存先: %s\nレビュー指摘内容を確認してください。すべて修正する場合は未入力状態でEnter、修正対象を選ぶ場合は修正する指摘と修正不要な指摘を入力してください。", feedbackPath)); err != nil {
 						return err
 					}
 				}
@@ -410,7 +415,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 					}
 					defer closeVerification()
 				}
-				prController = newPRReviewController(selectedPR, stderr, fixJob, conflictJob, fixEngine.Close, startVerification, closeVerification)
+				prController = newPRReviewController(selectedPR, displayOut, fixJob, conflictJob, fixEngine.Close, startVerification, closeVerification)
 				prController.SetResetJob(fixEngine.Reset)
 				if job := prController.InitialJob(); job != nil {
 					initialJob = job
@@ -421,7 +426,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 			cfg := daemon.Config{
 				Provider: activeAI.Provider, Binary: activeAI.Binary, Model: activeAI.Model,
 				WorkingDir: *dir, AllowAllTools: *allowAllTools, StreamLogs: *streamLogs,
-				LogOut: logFile, LogErr: logFile, StatusOut: stderr, ResultOut: stderr,
+				LogOut: logFile, LogErr: logFile, StatusOut: displayOut, ResultOut: displayOut,
 				InitialPrompt:   initialPrompt,
 				InitialJob:      initialJob,
 				AllowedCommands: configured.BuiltinAllowedCommands,
@@ -769,7 +774,7 @@ func selectRequestedGitHubInformationWithFilters(ctx context.Context, out io.Wri
 			return nil, nil, err
 		}
 		if selected.Phase == prworkflow.PhaseReviewApproved {
-			if _, err := fmt.Fprintln(out, "レビュー指摘承認済みです。未入力状態でEnterを押すとIssue/PR選択へ戻ります。文字を入力すると再レビューを実行します。"); err != nil {
+			if err := daemon.SystemMessage(out, "レビュー指摘承認済みです。未入力状態でEnterを押すとIssue/PR選択へ戻ります。文字を入力すると再レビューを実行します。"); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -992,11 +997,12 @@ func writeSelectedIssue(out io.Writer, selected *issueworkflow.Workflow, phaseNa
 	}
 	result := selected.PendingApprovalResult()
 	if strings.TrimSpace(result) == "" {
-		_, err := fmt.Fprintf(out, "保存済みの%s結果がないため、Issue #%dの%sを再実行します。\n", phaseName, selected.Issue.Number, phaseName)
+		return daemon.SystemMessage(out, fmt.Sprintf("保存済みの%s結果がないため、Issue #%dの%sを再実行します。", phaseName, selected.Issue.Number, phaseName))
+	}
+	if _, err := fmt.Fprintf(out, "%s\n", strings.TrimRight(result, "\n")); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintf(out, "\n---\n\n%s\n%sが完了しました。承認する場合は未入力状態でEnter、もしくは承認、approve、aのいずれかを入力してください。\n修正する場合は内容を入力してください。AIへ送信して再%sします。\n", result, phaseName, phaseName)
-	return err
+	return daemon.SystemMessage(out, fmt.Sprintf("%sが完了しました。承認する場合は未入力状態でEnter、もしくは承認、approve、aのいずれかを入力してください。\n修正する場合は内容を入力してください。AIへ送信して再%sします。", phaseName, phaseName))
 }
 
 func listIssuesForSelection(ctx context.Context, workingDir, search string) ([]issueworkflow.Issue, error) {
@@ -1241,7 +1247,7 @@ func selectPullRequestForRole(ctx context.Context, reader *bufio.Reader, out io.
 		return nil, err
 	}
 	if selected.Phase == prworkflow.PhaseReviewApproved {
-		if _, err := fmt.Fprintln(out, "レビュー指摘承認済みです。未入力状態でEnterを押すとIssue/PR選択へ戻ります。文字を入力すると再レビューを実行します。"); err != nil {
+		if err := daemon.SystemMessage(out, "レビュー指摘承認済みです。未入力状態でEnterを押すとIssue/PR選択へ戻ります。文字を入力すると再レビューを実行します。"); err != nil {
 			return nil, err
 		}
 	}
