@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -266,6 +267,11 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 	if _, isFile := in.(*os.File); !isFile {
 		selectionInput = bufio.NewReader(in)
 	}
+	var autoInput *autoPollingInput
+	if *autoMode {
+		autoInput = newAutoPollingInput(selectionInput)
+		selectionInput = autoInput
+	}
 	requested := requestedGitHubInformation{issueSpecified: issueSpecified, issueNumber: *issueNumber, prSpecified: prSpecified, prNumber: *prNumber}
 	for {
 		activeFilters := filters
@@ -282,7 +288,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 		if *autoMode {
 			selectedIssue, selectedPR, err = selectAutoGitHubInformation(ctx, stdout, *dir, configured.WorkspaceName, mode, assigneeFilter, activeFilters)
 			if errors.Is(err, errNoAutoTargets) {
-				if waitErr := waitForAutoPolling(ctx, stdout, configured.AutoPollingInterval, autoPollingInterval); waitErr != nil {
+				if waitErr := waitForAutoPolling(ctx, stdout, configured.AutoPollingInterval, autoPollingInterval, autoInput); waitErr != nil {
 					if errors.Is(waitErr, context.Canceled) {
 						return nil
 					}
@@ -452,18 +458,176 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 	}
 }
 
-func waitForAutoPolling(ctx context.Context, out io.Writer, displayInterval string, interval time.Duration) error {
-	if _, err := fmt.Fprintf(out, "フィルタに一致する自動処理対象がありません。%s後に再取得します。\n", displayInterval); err != nil {
+func waitForAutoPolling(ctx context.Context, out io.Writer, displayInterval string, interval time.Duration, inputs ...io.Reader) error {
+	if _, err := fmt.Fprintf(out, "フィルタに一致する自動処理対象がありません。Enterで再取得、%s後に再取得します。\n", displayInterval); err != nil {
 		return err
 	}
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
+	waitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var input <-chan string
+	var inputErr <-chan error
+	if len(inputs) > 0 {
+		if lifecycle, ok := inputs[0].(interface {
+			beginWait()
+			endWait()
+		}); ok {
+			lifecycle.beginWait()
+			defer lifecycle.endWait()
+		}
 	}
+	startInput := func() {
+		if len(inputs) == 0 || inputs[0] == nil {
+			return
+		}
+		if lineInput, ok := inputs[0].(interface {
+			nextLine(context.Context) (string, error)
+		}); ok {
+			lines := make(chan string, 1)
+			errs := make(chan error, 1)
+			go func() {
+				line, err := lineInput.nextLine(waitCtx)
+				if err != nil {
+					errs <- err
+					return
+				}
+				lines <- line
+			}()
+			input, inputErr = lines, errs
+		} else {
+			lines := make(chan string, 1)
+			go func() {
+				line, err := bufio.NewReader(inputs[0]).ReadString('\n')
+				if err != nil {
+					return
+				}
+				lines <- line
+			}()
+			input = lines
+		}
+	}
+	startInput()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return nil
+		case line := <-input:
+			if strings.TrimSpace(line) == "" {
+				return nil
+			}
+			startInput()
+		case err := <-inputErr:
+			if err != nil && !errors.Is(err, io.EOF) {
+				return err
+			}
+			input, inputErr = nil, nil
+		}
+	}
+}
+
+type autoPollingInput struct {
+	mu          sync.Mutex
+	waiting     bool
+	waitLines   []autoPollingLine
+	normalLines []autoPollingLine
+	notify      chan struct{}
+	pending     []byte
+	terminalErr error
+}
+
+type autoPollingLine struct {
+	line string
+	err  error
+}
+
+func newAutoPollingInput(in io.Reader) *autoPollingInput {
+	input := &autoPollingInput{notify: make(chan struct{}, 1)}
+	go func() {
+		reader := bufio.NewReader(in)
+		for {
+			line, err := reader.ReadString('\n')
+			input.mu.Lock()
+			if input.waiting {
+				input.waitLines = append(input.waitLines, autoPollingLine{line: line, err: err})
+			} else {
+				input.normalLines = append(input.normalLines, autoPollingLine{line: line, err: err})
+			}
+			input.mu.Unlock()
+			select {
+			case input.notify <- struct{}{}:
+			default:
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return input
+}
+
+func (in *autoPollingInput) beginWait() {
+	in.mu.Lock()
+	in.waiting = true
+	in.waitLines = nil
+	in.normalLines = nil
+	in.mu.Unlock()
+}
+
+func (in *autoPollingInput) endWait() {
+	in.mu.Lock()
+	in.waiting = false
+	in.waitLines = nil
+	in.mu.Unlock()
+}
+
+func (in *autoPollingInput) nextLine(ctx context.Context) (string, error) {
+	for {
+		in.mu.Lock()
+		if len(in.waitLines) > 0 {
+			result := in.waitLines[0]
+			in.waitLines = in.waitLines[1:]
+			in.mu.Unlock()
+			return result.line, result.err
+		}
+		in.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-in.notify:
+		}
+	}
+}
+
+func (in *autoPollingInput) Read(p []byte) (int, error) {
+	if len(in.pending) == 0 {
+		if in.terminalErr != nil {
+			return 0, in.terminalErr
+		}
+		for {
+			in.mu.Lock()
+			if len(in.normalLines) > 0 {
+				result := in.normalLines[0]
+				in.normalLines = in.normalLines[1:]
+				in.mu.Unlock()
+				if result.err != nil {
+					in.terminalErr = result.err
+					if len(result.line) == 0 {
+						return 0, result.err
+					}
+				}
+				in.pending = []byte(result.line)
+				break
+			}
+			in.mu.Unlock()
+			<-in.notify
+		}
+	}
+	n := copy(p, in.pending)
+	in.pending = in.pending[n:]
+	return n, nil
 }
 
 type requestedGitHubInformation struct {
