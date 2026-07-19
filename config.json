@@ -8,11 +8,15 @@
   "builtinAllowedCommands": [
     "npm install", "npm ci", "npm test",
     "go build", "go test", "go mod tidy", "go mod download",
-    "git log", "git add", "git commit", "git diff", "git status", "git stash",
+    "git log", "git show", "git grep", "git add", "git commit", "git diff", "git status", "git stash",
+    "git fetch", "git remote", "git ls-remote", "git worktree add",
     "git --no-pager diff", "git --no-pager grep", "git --no-pager log", "git --no-pager show", "git --no-pager status",
-    "command -v", "cd", "true",
-    "ls", "dir", "cat", "type", "more", "head", "echo", "sed", "set", "pwd", "grep", "rg", "find", "tee", "wc",
-    "get-childitem", "get-content", "select-object", "select-string"
+    "gh pr view", "gh pr diff", "gh pr checks", "gh issue view",
+    "command -v", "cd", "true", "test",
+    "ls", "dir", "cat", "type", "more", "head", "echo", "printf", "sed", "set", "pwd", "grep", "rg", "find", "tee", "wc",
+    "get-childitem", "get-content", "select-object", "select-string",
+    "git fetch --quiet origin refs/pull/22/head:refs/review/pr-22 && test ! -e .review-pr-22 && git worktree add --quiet --detach .review-pr-22 refs/review/pr-22 && (cd .review-pr-22 && go test ./cmd/korocon ./internal/runner && ! git grep -in 'cloade-sonnet-4\\.6')",
+    "set -e\nreview_dir=$(mktemp -d /tmp/korocon-pr-22.XXXXXX)\ngit fetch --quiet origin refs/pull/22/head:refs/review/pr-22\ngit worktree add --quiet --detach \"$review_dir\" refs/review/pr-22\n(\n  cd \"$review_dir\"\n  go test ./...\n  printf '\\n--- exact old spelling matches ---\\n'\n  git --no-pager grep -in 'cloade-sonnet-4\\.6' || true\n)\nstatus=$?\ngit worktree remove --force \"$review_dir\"\nrmdir \"$review_dir\" 2>/dev/null || true\nexit $status"
   ],
   "builtinAllowedPaths": [
     "~/.copilot/session-state/*/plan.md"

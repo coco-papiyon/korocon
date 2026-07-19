@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -117,6 +118,56 @@ func TestAdditionalRequestedCopilotCommandsAreAllowed(t *testing.T) {
 		if !commandRequestAllowed(params, allowed) {
 			t.Errorf("expected command to be allowed: %s", command)
 		}
+	}
+}
+
+func TestReviewRequestedCommandsAreAllowed(t *testing.T) {
+	worktree := "/home/coco/dev/go/src/github.com/coco-papiyon/korocon-branches/korocon-21"
+	worktreeScript := `git fetch --quiet origin refs/pull/22/head:refs/review/pr-22 && test ! -e .review-pr-22 && git worktree add --quiet --detach .review-pr-22 refs/review/pr-22 && (cd .review-pr-22 && go test ./cmd/korocon ./internal/runner && ! git grep -in 'cloade-sonnet-4\.6')`
+	temporaryReviewScript := `set -e
+review_dir=$(mktemp -d /tmp/korocon-pr-22.XXXXXX)
+git fetch --quiet origin refs/pull/22/head:refs/review/pr-22
+git worktree add --quiet --detach "$review_dir" refs/review/pr-22
+(
+  cd "$review_dir"
+  go test ./...
+  printf '\n--- exact old spelling matches ---\n'
+  git --no-pager grep -in 'cloade-sonnet-4\.6' || true
+)
+status=$?
+git worktree remove --force "$review_dir"
+rmdir "$review_dir" 2>/dev/null || true
+exit $status`
+	allowed := []string{
+		"cd", "echo", "printf", "true", "go test",
+		"git show", "git grep", "git remote", "git ls-remote",
+		"gh pr view", "gh pr diff", "gh pr checks", "gh issue view",
+		worktreeScript, temporaryReviewScript,
+	}
+	commands := []string{
+		"cd " + worktree + " && git show ff7e027 --stat && git show 53df91e --stat",
+		`cd ` + worktree + ` && git grep -i "cloade" && echo "残存なし" || echo "残存なし"`,
+		`gh pr view 22 --repo coco-papiyon/korocon --json number,title,headRefName,baseRefName,body,commits,files,statusCheckRollup && printf '\n--- ISSUE ---\n' && gh issue view 21 --repo coco-papiyon/korocon --json number,title,body,state,comments && printf '\n--- DIFF ---\n' && gh pr diff 22 --repo coco-papiyon/korocon --patch`,
+		worktreeScript,
+		`go test ./cmd/korocon ./internal/runner && ! git grep -in 'cloade' HEAD`,
+		`git remote -v && git ls-remote origin 'refs/pull/22/head'`,
+		`gh pr diff 22 --repo coco-papiyon/korocon --color=never && gh pr checks 22 --repo coco-papiyon/korocon --watch=false`,
+		temporaryReviewScript,
+	}
+	for _, command := range commands {
+		params, err := json.Marshal(map[string]string{"command": command})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !commandRequestAllowed(params, allowed) {
+			t.Errorf("expected command to be allowed: %s", command)
+		}
+	}
+
+	changedScript := strings.Replace(temporaryReviewScript, "/tmp/korocon-pr-22.XXXXXX", "/tmp/other.XXXXXX", 1)
+	params, _ := json.Marshal(map[string]string{"command": changedScript})
+	if commandRequestAllowed(params, allowed) {
+		t.Fatal("modified destructive review script was allowed without an exact entry")
 	}
 }
 

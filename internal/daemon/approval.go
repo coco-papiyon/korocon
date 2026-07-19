@@ -90,6 +90,11 @@ func commandRequestAllowed(params json.RawMessage, allowed []string) bool {
 
 func commandMatchesAllowed(command string, allowedSet map[string]struct{}) bool {
 	for _, candidate := range commandCandidates(command) {
+		// Explicit full-command entries may intentionally contain shell syntax.
+		// They are trusted only on normalized exact match, never by prefix.
+		if _, ok := allowedSet[normalizeCommand(candidate)]; ok {
+			return true
+		}
 		commands, ok := splitSafeCommandChain(candidate)
 		if !ok {
 			continue
@@ -109,6 +114,10 @@ func commandMatchesAllowed(command string, allowedSet map[string]struct{}) bool 
 }
 
 func simpleCommandMatchesAllowed(command string, allowedSet map[string]struct{}) bool {
+	command = strings.TrimSpace(command)
+	if strings.HasPrefix(command, "! ") {
+		command = strings.TrimSpace(strings.TrimPrefix(command, "! "))
+	}
 	normalized := normalizeCommand(stripAllowedStderrRedirection(command))
 	if _, ok := allowedSet[normalized]; ok {
 		return true

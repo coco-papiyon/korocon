@@ -38,10 +38,12 @@ type Config struct {
 var defaultAllowedCommands = []string{
 	"npm install", "npm ci", "npm test",
 	"go build", "go test", "go mod tidy", "go mod download",
-	"git log", "git add", "git commit", "git diff", "git status", "git stash",
+	"git log", "git show", "git grep", "git add", "git commit", "git diff", "git status", "git stash",
+	"git fetch", "git remote", "git ls-remote", "git worktree add",
 	"git --no-pager diff", "git --no-pager grep", "git --no-pager log", "git --no-pager show", "git --no-pager status",
-	"command -v", "cd", "true",
-	"ls", "dir", "cat", "type", "more", "head", "echo", "sed", "set", "pwd", "grep", "rg", "find", "tee", "wc",
+	"gh pr view", "gh pr diff", "gh pr checks", "gh issue view",
+	"command -v", "cd", "true", "test",
+	"ls", "dir", "cat", "type", "more", "head", "echo", "printf", "sed", "set", "pwd", "grep", "rg", "find", "tee", "wc",
 	"get-childitem", "get-content", "select-object", "select-string",
 }
 
