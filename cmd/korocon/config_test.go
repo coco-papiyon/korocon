@@ -55,6 +55,7 @@ func TestPrintConfigList(t *testing.T) {
 	configured.ImplementerProvider = "copilot"
 	configured.ImplementerModel = "auto"
 	configured.BuiltinAllowedCommands = []string{"go test ./...", "git status"}
+	configured.BuiltinAllowedPaths = []string{"~/.copilot/session-state/*/plan.md"}
 	var out strings.Builder
 	if err := printConfigList(&out, "/tmp/korocon/config.json", configured); err != nil {
 		t.Fatal(err)
@@ -66,6 +67,8 @@ func TestPrintConfigList(t *testing.T) {
 		"implementerModel: auto",
 		"  - go test ./...",
 		"  - git status",
+		"builtinAllowedPaths:",
+		"  - ~/.copilot/session-state/*/plan.md",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output does not contain %q: %q", want, out.String())
@@ -160,6 +163,22 @@ func TestAddBuiltinAllowedCommandDoesNotSaveDuplicate(t *testing.T) {
 		t.Fatalf("duplicate command unexpectedly saved config: %v", err)
 	}
 	if !strings.Contains(out.String(), "すでに登録されています") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestAddBuiltinAllowedPathSavesPattern(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	configured := appconfig.Default()
+	var out strings.Builder
+	if err := addBuiltinAllowedPath(configured, path, " /tmp/copilot/*/plan.md ", &out); err != nil {
+		t.Fatal(err)
+	}
+	saved := readSavedConfig(t, path)
+	if got := saved.BuiltinAllowedPaths[len(saved.BuiltinAllowedPaths)-1]; got != "/tmp/copilot/*/plan.md" {
+		t.Fatalf("last allowed path = %q", got)
+	}
+	if !strings.Contains(out.String(), "自動承認パスを追加しました: /tmp/copilot/*/plan.md") {
 		t.Fatalf("output = %q", out.String())
 	}
 }

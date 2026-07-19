@@ -28,9 +28,10 @@ korocon config init
 korocon config init --force  # 既存config.jsonを再初期化
 korocon config model         # モデル設定だけを変更
 korocon config allow "go test ./..."
+korocon config allow-path "~/.copilot/session-state/*/plan.md"
 ```
 
-`korocon config allow [COMMAND]`は`builtinAllowedCommands`へコマンドを追加します。`COMMAND`を省略した場合は追加するコマンドの入力を促します。登録済みコマンドは大文字・小文字と連続空白を正規化して判定し、重複追加しません。
+`korocon config allow [COMMAND]`は`builtinAllowedCommands`へコマンドを追加します。`korocon config allow-path [GLOB]`は`builtinAllowedPaths`へCopilotの自動承認対象パスを追加します。引数を省略した場合は対話入力になります。
 
 ```text
 tools/
@@ -54,7 +55,8 @@ tools/
   "reviewerModel": "claude-sonnet-4.5",
   "reviewer": "octocat",
   "startupCommand": "go run ./cmd/app",
-  "builtinAllowedCommands": ["git add", "git diff", "git status", "go test"]
+  "builtinAllowedCommands": ["git add", "git diff", "git status", "go test"],
+  "builtinAllowedPaths": ["~/.copilot/session-state/*/plan.md"]
 }
 ```
 
@@ -69,6 +71,7 @@ tools/
 | `baseBranch` | `main` | 実装承認時に作成するPRのbaseブランチです。 |
 | `startupCommand` | 未設定 | レビュー承認後にPR headのworktreeで自動起動する動作確認コマンドです。標準出力と標準エラーはログファイルへ記録します。 |
 | `builtinAllowedCommands` | korobokcleと同じ既定リスト | Codexのコマンド実行要求を自動承認するコマンドです。省略または空配列では既定リストを使用します。 |
+| `builtinAllowedPaths` | `~/.copilot/session-state/*/plan.md` | Copilotのパス・diff要求を自動承認するglobです。diffは全変更対象が一致する場合だけ承認します。 |
 | `implementerProvider` | `codex` | 設計、実装、レビュー指摘修正を担当するProviderです。 |
 | `implementerModel` | `gpt-5.6-luna` | 実装者のModelです。 |
 | `verifierProvider` | 実装者と同じ | Issue実装とPRレビュー指摘修正の検証を担当するProviderです。 |
@@ -276,6 +279,8 @@ Codexへ渡す内容は「設計または実装を行う」という工程指示
 入力の先頭が `/` の行はコマンドとして扱われます。`/model` で選択可能なモデルを表示し、番号またはモデル名を指定して切り替えます。Codexには`thread/settings/update`、CopilotにはACPの`session/prompt`で`/model <モデル名>`を送り、成功応答後に表示中のモデルを更新します。プロセスと会話セッションは再起動しません。
 
 Codexがコマンド実行を要求した場合、`builtinAllowedCommands`に一致するコマンドは自動承認し、`[自動承認]`と対象を表示します。完全一致のほか、安全な引数やLinuxの安全な環境変数代入を付けた実行とCodexが提示する`proposedExecpolicyAmendment`、`commandActions`を判定します。`;`、`&&`、パイプ、コマンド置換などを含む複合実行は、許可コマンドから始まっていても自動承認しません。
+
+CopilotのACP承認要求に`path`または`fileName`が含まれる場合は`builtinAllowedPaths`と照合します。`diff`の場合は`diff --git`ヘッダーから変更対象を抽出し、全対象が許可globに一致する場合だけ自動承認します。既定値ではCopilotのセッション状態に作成される`plan.md`だけが対象です。
 
 許可リストに一致しない操作やファイル変更要求は画面へ表示します。未入力状態でEnterまたは`/approve`を入力すると今回だけ承認し、`/decline`で拒否します。`/allow`を入力すると今回の操作を承認し、Codexの`commandActions`から抽出した具体的なコマンドを実行中の許可リストとバイナリ横の`config.json`へ追加します。Linuxの先頭環境変数代入は除去して保存するため、`GOCACHE=/tmp/cache go test ./...`は`go test ./...`として追加されます。設定保存に失敗した場合は承認せず、承認待ちを継続します。`--dangerously-bypass-approvals-and-sandbox`は使用しません。
 

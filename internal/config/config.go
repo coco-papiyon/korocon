@@ -25,6 +25,7 @@ type Config struct {
 	BaseBranch              string   `json:"baseBranch"`
 	StartupCommand          string   `json:"startupCommand,omitempty"`
 	BuiltinAllowedCommands  []string `json:"builtinAllowedCommands"`
+	BuiltinAllowedPaths     []string `json:"builtinAllowedPaths"`
 	ImplementerProvider     string   `json:"implementerProvider"`
 	ImplementerModel        string   `json:"implementerModel"`
 	VerifierProvider        string   `json:"verifierProvider,omitempty"`
@@ -42,18 +43,27 @@ var defaultAllowedCommands = []string{
 	"get-childitem", "get-content", "select-object", "select-string",
 }
 
+var defaultAllowedPaths = []string{
+	"~/.copilot/session-state/*/plan.md",
+}
+
 func Default() Config {
 	return Config{
 		WorkspaceName: ".workspace", BranchNamePattern: "issue_#<issue番号>",
 		ImplementationDirectory: defaultImplementationDirectory, ImplementationLoopCount: 3,
 		AutoPollingInterval: "5m", BaseBranch: "main",
 		BuiltinAllowedCommands: DefaultAllowedCommands(),
+		BuiltinAllowedPaths:    DefaultAllowedPaths(),
 		ImplementerProvider:    "codex", ImplementerModel: "gpt-5.6-luna",
 	}
 }
 
 func DefaultAllowedCommands() []string {
 	return append([]string(nil), defaultAllowedCommands...)
+}
+
+func DefaultAllowedPaths() []string {
+	return append([]string(nil), defaultAllowedPaths...)
 }
 
 // Load reads config.json from the directory containing the korocon binary.
@@ -96,6 +106,16 @@ func AddBuiltinAllowedCommand(configured Config, command string) (Config, bool) 
 	before := len(normalizeStringList(configured.BuiltinAllowedCommands))
 	configured.BuiltinAllowedCommands = normalizeStringList(append(configured.BuiltinAllowedCommands, command))
 	return configured, len(configured.BuiltinAllowedCommands) > before
+}
+
+func AddBuiltinAllowedPath(configured Config, pattern string) (Config, bool) {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return configured, false
+	}
+	before := len(normalizePathList(configured.BuiltinAllowedPaths))
+	configured.BuiltinAllowedPaths = normalizePathList(append(configured.BuiltinAllowedPaths, pattern))
+	return configured, len(configured.BuiltinAllowedPaths) > before
 }
 
 func loadFile(path string) (Config, error) {
@@ -164,6 +184,10 @@ func loadFile(path string) (Config, error) {
 	if len(configured.BuiltinAllowedCommands) == 0 {
 		configured.BuiltinAllowedCommands = DefaultAllowedCommands()
 	}
+	configured.BuiltinAllowedPaths = normalizePathList(configured.BuiltinAllowedPaths)
+	if len(configured.BuiltinAllowedPaths) == 0 {
+		configured.BuiltinAllowedPaths = DefaultAllowedPaths()
+	}
 	configured.ImplementerProvider, err = normalizeProvider(configured.ImplementerProvider, "codex")
 	if err != nil {
 		return Config{}, fmt.Errorf("config implementerProvider: %w", err)
@@ -225,6 +249,24 @@ func normalizeStringList(values []string) []string {
 			continue
 		}
 		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func normalizePathList(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		value = filepath.ToSlash(value)
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
 		out = append(out, value)
 	}
 	return out

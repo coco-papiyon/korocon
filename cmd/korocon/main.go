@@ -430,6 +430,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 				InitialPrompt:   initialPrompt,
 				InitialJob:      initialJob,
 				AllowedCommands: configured.BuiltinAllowedCommands,
+				AllowedPaths:    configured.BuiltinAllowedPaths,
 			}
 			cfg.AddAllowedCommand = func(command string) error {
 				updated, _ := appconfig.AddBuiltinAllowedCommand(configured, command)
@@ -1531,8 +1532,10 @@ func printUsage(w io.Writer) {
 Usage:
   korocon [options]
   korocon config init [--force]
+  korocon config list
   korocon config model
   korocon config allow [COMMAND]
+  korocon config allow-path [GLOB]
   korocon doctor [--binary codex]
   korocon version
 

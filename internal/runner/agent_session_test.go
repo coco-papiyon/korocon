@@ -109,6 +109,48 @@ func TestCopilotACPMapsPermissionRequestToExistingApprovalHandler(t *testing.T) 
 	}
 }
 
+func TestCopilotACPForwardsPathPermissionSeparately(t *testing.T) {
+	oldCommand := copilotACPCommand
+	copilotACPCommand = func(ctx context.Context, _ string, _ string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestCopilotACPHelperProcess")
+		cmd.Env = append(os.Environ(), "KOROCON_COPILOT_ACP_HELPER=1")
+		return cmd
+	}
+	defer func() { copilotACPCommand = oldCommand }()
+
+	var method, path string
+	session, err := StartCopilotSession(context.Background(), SessionConfig{
+		WorkingDir: t.TempDir(), LogErr: io.Discard,
+		HandleRequest: func(_ context.Context, gotMethod string, params json.RawMessage) (any, error) {
+			method = gotMethod
+			var detail struct {
+				RawInput struct {
+					Path string `json:"path"`
+				} `json:"rawInput"`
+			}
+			_ = json.Unmarshal(params, &detail)
+			path = detail.RawInput.Path
+			return map[string]string{"decision": "accept"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := session.RunTurn(context.Background(), "path-permission", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if method != "copilot/session/requestPermission" || path != "/tmp/copilot/session/plan.md" {
+		t.Fatalf("approval method=%q path=%q", method, path)
+	}
+	if result.Text != "permission:allow-once" {
+		t.Fatalf("result = %q", result.Text)
+	}
+}
+
 func TestCopilotACPHelperProcess(t *testing.T) {
 	if os.Getenv("KOROCON_COPILOT_ACP_HELPER") != "1" {
 		return
@@ -152,10 +194,14 @@ func TestCopilotACPHelperProcess(t *testing.T) {
 				model = strings.TrimPrefix(prompt, "/model ")
 			}
 			answer := "command:" + prompt
-			if prompt == "permission" {
+			if prompt == "permission" || prompt == "path-permission" {
+				rawInput := map[string]string{"command": "go test ./..."}
+				if prompt == "path-permission" {
+					rawInput = map[string]string{"path": "/tmp/copilot/session/plan.md"}
+				}
 				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": 99, "method": "session/request_permission", "params": map[string]any{
 					"sessionId": params.SessionID,
-					"toolCall":  map[string]any{"toolCallId": "tool-1", "title": "Run tests", "rawInput": map[string]string{"command": "go test ./..."}},
+					"toolCall":  map[string]any{"toolCallId": "tool-1", "title": "Request permission", "rawInput": rawInput},
 					"options":   []map[string]string{{"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"}, {"optionId": "reject-once", "name": "Reject", "kind": "reject_once"}},
 				}})
 				if scanner.Scan() {
@@ -171,7 +217,7 @@ func TestCopilotACPHelperProcess(t *testing.T) {
 				}
 			}
 			if !strings.HasPrefix(prompt, "/") {
-				if prompt != "permission" {
+				if prompt != "permission" && prompt != "path-permission" {
 					answer = fmt.Sprintf("answer:%s model:%s", prompt, model)
 				}
 			}

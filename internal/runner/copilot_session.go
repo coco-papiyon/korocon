@@ -336,8 +336,15 @@ func (s *CopilotSession) handleServerRequest(message rpcMessage) {
 	decision := "decline"
 	if s.handleRequest != nil {
 		command := copilotApprovalCommand(params.ToolCall.RawInput)
-		translated, _ := json.Marshal(map[string]string{"command": command, "reason": params.ToolCall.Title})
-		result, err := s.handleRequest(s.ctx, "item/commandExecution/requestApproval", translated)
+		method := "item/commandExecution/requestApproval"
+		var translated []byte
+		if command != "" {
+			translated, _ = json.Marshal(map[string]string{"command": command, "reason": params.ToolCall.Title})
+		} else {
+			method = "copilot/session/requestPermission"
+			translated, _ = json.Marshal(map[string]any{"title": params.ToolCall.Title, "rawInput": params.ToolCall.RawInput})
+		}
+		result, err := s.handleRequest(s.ctx, method, translated)
 		if err != nil {
 			response["error"] = map[string]any{"code": -32603, "message": err.Error()}
 			_ = s.write(response)
@@ -368,8 +375,7 @@ func copilotApprovalCommand(raw map[string]any) string {
 			return value
 		}
 	}
-	data, _ := json.Marshal(raw)
-	return string(data)
+	return ""
 }
 
 func (s *CopilotSession) processError() error {

@@ -11,5 +11,8 @@
     "git log", "git diff", "git status", "git stash",
     "ls", "dir", "cat", "type", "more", "head", "echo", "sed", "set", "pwd", "grep", "find", "tee", "wc",
     "get-childitem", "get-content", "select-object", "select-string"
+  ],
+  "builtinAllowedPaths": [
+    "~/.copilot/session-state/*/plan.md"
   ]
 }

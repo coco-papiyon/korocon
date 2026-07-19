@@ -33,6 +33,7 @@ type Config struct {
 	InitialPrompt     string
 	InitialJob        *JobSpec
 	AllowedCommands   []string
+	AllowedPaths      []string
 	AddAllowedCommand func(string) error
 	BeforeJob         func(context.Context, uint64, string) error
 	OnJobStart        func(context.Context, uint64, string) error
@@ -98,6 +99,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 	var sessionMu sync.Mutex
 	var pendingApproval *approvalPrompt
 	allowedCommands := normalizeAllowedCommands(cfg.AllowedCommands)
+	allowedPaths := normalizeAllowedPaths(cfg.AllowedPaths)
 	logOut := synchronizedWriter{mu: &logMu, dst: cfg.LogOut}
 	logErr := synchronizedWriter{mu: &logMu, dst: cfg.LogErr}
 	// Tool command details are already present in the raw JSON log. Do not
@@ -128,23 +130,34 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		_, _ = io.WriteString(statusWriter, "> ")
 	}
 	handleServerRequest := func(requestCtx context.Context, method string, params json.RawMessage) (any, error) {
-		if !strings.HasSuffix(method, "requestApproval") {
-			status("\r\033[2K[Codex応答待ち] %s\n", method)
-			return nil, fmt.Errorf("unsupported Codex request: %s", method)
+		pathRequest := method == "copilot/session/requestPermission"
+		if !strings.HasSuffix(method, "requestApproval") && !pathRequest {
+			status("\r\033[2K[AI応答待ち] %s\n", method)
+			return nil, fmt.Errorf("unsupported AI request: %s", method)
 		}
 		allowedMu.RLock()
 		allowed := append([]string(nil), allowedCommands...)
+		paths := append([]string(nil), allowedPaths...)
 		allowedMu.RUnlock()
 		if method == "item/commandExecution/requestApproval" && commandRequestAllowed(params, allowed) {
 			status("\r\033[2K[自動承認] %s\n", approvalDescription(method, params))
 			return map[string]string{"decision": "accept"}, nil
 		}
+		if pathRequest && copilotPathRequestAllowed(params, paths) {
+			status("\r\033[2K[自動承認] %s\n", copilotPathApprovalDescription(params))
+			return map[string]string{"decision": "accept"}, nil
+		}
 		var detail struct {
 			Command string `json:"command"`
 			Reason  string `json:"reason"`
+			Title   string `json:"title"`
 		}
 		_ = json.Unmarshal(params, &detail)
-		prompt := &approvalPrompt{decision: make(chan string, 1), command: approvalCommand(params)}
+		command := ""
+		if !pathRequest {
+			command = approvalCommand(params)
+		}
+		prompt := &approvalPrompt{decision: make(chan string, 1), command: command}
 		approvalMu.Lock()
 		if pendingApproval != nil {
 			approvalMu.Unlock()
@@ -164,9 +177,19 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			description = detail.Reason
 		}
 		if description == "" {
+			description = detail.Title
+		}
+		if pathRequest {
+			description = copilotPathApprovalDescription(params)
+		}
+		if description == "" {
 			description = method
 		}
-		status("\r\033[2K[承認待ち] %s\n未入力状態でEnterまたは/approveで承認、/allowで承認して自動承認コマンドへ追加、/declineで拒否します。\n", description)
+		guidance := "未入力状態でEnterまたは/approveで承認、/allowで承認して自動承認コマンドへ追加、/declineで拒否します。"
+		if pathRequest {
+			guidance = "未入力状態でEnterまたは/approveで承認、/declineで拒否します。恒久的に許可する場合はconfigのbuiltinAllowedPathsへglobを追加してください。"
+		}
+		status("\r\033[2K[承認待ち] %s\n%s\n", description, guidance)
 		promptMark()
 		select {
 		case <-requestCtx.Done():

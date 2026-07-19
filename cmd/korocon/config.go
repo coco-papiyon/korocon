@@ -74,6 +74,20 @@ func runConfig(args []string, in io.Reader, out, stderr io.Writer) error {
 			}
 		}
 		return addBuiltinAllowedCommand(configured, path, command, out)
+	case "allow-path":
+		configured, path, err := appconfig.Load()
+		if err != nil {
+			return err
+		}
+		pattern := strings.TrimSpace(strings.Join(args[1:], " "))
+		if pattern == "" {
+			reader := bufio.NewReader(in)
+			pattern, err = readConfigLine(reader, out, "自動承認パス(glob): ")
+			if err != nil {
+				return err
+			}
+		}
+		return addBuiltinAllowedPath(configured, path, pattern, out)
 	default:
 		return fmt.Errorf("unknown config command %q (try 'korocon config help')", args[0])
 	}
@@ -119,6 +133,14 @@ func printConfigList(out io.Writer, path string, configured appconfig.Config) er
 			return err
 		}
 	}
+	if _, err := fmt.Fprintln(out, "builtinAllowedPaths:"); err != nil {
+		return err
+	}
+	for _, pattern := range configured.BuiltinAllowedPaths {
+		if _, err := fmt.Fprintf(out, "  - %s\n", pattern); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -136,6 +158,23 @@ func addBuiltinAllowedCommand(configured appconfig.Config, path, command string,
 		return err
 	}
 	_, err := fmt.Fprintf(out, "自動承認コマンドを追加しました: %s\nconfig: %s\n", command, path)
+	return err
+}
+
+func addBuiltinAllowedPath(configured appconfig.Config, path, pattern string, out io.Writer) error {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return errors.New("追加する自動承認パスを入力してください")
+	}
+	updated, added := appconfig.AddBuiltinAllowedPath(configured, pattern)
+	if !added {
+		_, err := fmt.Fprintf(out, "自動承認パスはすでに登録されています: %s\n", pattern)
+		return err
+	}
+	if err := appconfig.Save(path, updated); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(out, "自動承認パスを追加しました: %s\nconfig: %s\n", pattern, path)
 	return err
 }
 
@@ -363,11 +402,13 @@ func printConfigUsage(out io.Writer) {
   korocon config list
   korocon config model
   korocon config allow [COMMAND]
+  korocon config allow-path [GLOB]
 
 Commands:
   init   interactively create config.json
   list   display all settings
   model  interactively update provider and model settings
   allow  add a command to builtinAllowedCommands
+  allow-path  add a path glob to builtinAllowedPaths
 `)
 }

@@ -30,6 +30,9 @@ func TestLoadFileUsesDefaultWhenMissing(t *testing.T) {
 	if !reflect.DeepEqual(configured.BuiltinAllowedCommands, DefaultAllowedCommands()) {
 		t.Fatalf("builtinAllowedCommands = %+v", configured.BuiltinAllowedCommands)
 	}
+	if !reflect.DeepEqual(configured.BuiltinAllowedPaths, DefaultAllowedPaths()) {
+		t.Fatalf("builtinAllowedPaths = %+v", configured.BuiltinAllowedPaths)
+	}
 	if configured.ImplementerProvider != "codex" || configured.ImplementerModel != "gpt-5.6-luna" || configured.VerifierProvider != "" || configured.ReviewerProvider != "" {
 		t.Fatalf("role defaults = %+v", configured)
 	}
@@ -183,6 +186,52 @@ func TestAddBuiltinAllowedCommandAndSave(t *testing.T) {
 	}
 	if !reflect.DeepEqual(loaded.BuiltinAllowedCommands, updated.BuiltinAllowedCommands) {
 		t.Fatalf("saved commands = %+v, want %+v", loaded.BuiltinAllowedCommands, updated.BuiltinAllowedCommands)
+	}
+}
+
+func TestDefaultAllowedPathsIncludesCopilotPlan(t *testing.T) {
+	want := []string{"~/.copilot/session-state/*/plan.md"}
+	if got := DefaultAllowedPaths(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("DefaultAllowedPaths() = %+v, want %+v", got, want)
+	}
+}
+
+func TestLoadFileNormalizesBuiltinAllowedPaths(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	content := []byte(`{"builtinAllowedPaths":[" ~/.copilot/session-state/*/plan.md ","~/.copilot/session-state/*/plan.md",""]}`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configured, err := loadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"~/.copilot/session-state/*/plan.md"}
+	if !reflect.DeepEqual(configured.BuiltinAllowedPaths, want) {
+		t.Fatalf("builtinAllowedPaths = %+v, want %+v", configured.BuiltinAllowedPaths, want)
+	}
+}
+
+func TestAddBuiltinAllowedPathAndSave(t *testing.T) {
+	configured := Default()
+	updated, added := AddBuiltinAllowedPath(configured, " /tmp/copilot/*/plan.md ")
+	if !added {
+		t.Fatal("expected a new path to be added")
+	}
+	updated, added = AddBuiltinAllowedPath(updated, "/tmp/copilot/*/plan.md")
+	if added {
+		t.Fatal("expected duplicate path not to be added")
+	}
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := Save(path, updated); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.BuiltinAllowedPaths, updated.BuiltinAllowedPaths) {
+		t.Fatalf("saved paths = %+v, want %+v", loaded.BuiltinAllowedPaths, updated.BuiltinAllowedPaths)
 	}
 }
 

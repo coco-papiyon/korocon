@@ -107,7 +107,9 @@ GitHub Projects v2のフィルタは`--project <番号>`、`--project-owner <own
 
 `korocon config allow [COMMAND]`は既存の自動承認コマンド正規化処理を使って`builtinAllowedCommands`へ追加し、重複時は設定ファイルを書き換えません。引数がない場合は標準入力からコマンドを対話取得します。
 
-実装設定として、ブランチ名規則、worktree親ディレクトリ、実装・検証ループ回数、自動処理の再取得間隔、PRのbaseブランチ、動作確認用の`startupCommand`も保持します。既定値は`issue_#<issue番号>`、`../<リポジトリ名>-branches/`、3回、`5m`、`main`、動作確認コマンド未設定です。worktree親ディレクトリの`<リポジトリ名>`または`<repositoryName>`は実行時に置換します。`builtinAllowedCommands`は自動承認するコマンドを保持し、省略または空の場合はkorobokcleと同じ既定リストを補完します。
+`korocon config allow-path [GLOB]`は`builtinAllowedPaths`へCopilotの自動承認パスを追加します。既定値は`~/.copilot/session-state/*/plan.md`です。
+
+実装設定として、ブランチ名規則、worktree親ディレクトリ、実装・検証ループ回数、自動処理の再取得間隔、PRのbaseブランチ、動作確認用の`startupCommand`も保持します。`builtinAllowedCommands`はコマンド許可、`builtinAllowedPaths`はCopilotのパス・diff許可として独立して保持します。
 
 AI設定は実装者、検証者、レビューアごとにProviderとModelを保持します。検証者・レビューアの各未指定値は実装者の解決済み設定を継承し、CLI引数、設定ファイル、既定値の順で解決します。Issue設計・実装、PRコンフリクト解消、レビュー指摘修正は実装者、Issue実装とレビュー指摘修正の検証は検証者、PRレビューはレビューアを使用します。
 
@@ -217,6 +219,8 @@ AIの標準出力はプロトコル用なので、そのまま画面へは表示
 app-server起動時に`sandbox_workspace_write.network_access=true`を明示し、threadは`sandbox: workspace-write`、`approvalPolicy: on-request`で開始します。これによりファイル・コマンドのsandboxと承認制御を維持したまま、GitHub APIなどへのネットワーク接続を許可します。`--dangerously-bypass-approvals-and-sandbox`は使用しません。
 
 Codexの`item/commandExecution/requestApproval`とCopilot ACPの`session/request_permission`を共通承認フローへ接続します。完全一致、安全な引数付き実行、LinuxまたはPowerShellの安全な先頭環境変数代入付き実行のみ自動承認し、シェルの連結、パイプ、リダイレクト、コマンド置換を含む実行は除外します。
+
+Copilot要求の`rawInput`に`path`または`fileName`がある場合は`builtinAllowedPaths`のglobと照合します。`diff`は`diff --git`ヘッダーの全変更対象が許可パスに一致した場合だけ自動承認し、許可対象と対象外が混在するdiffは手動承認へ送ります。
 
 許可リストに一致しない`requestApproval`はターン処理を待機させます。未入力Enterまたは`/approve`は`accept`、`/decline`は`decline`をJSON応答として返します。`/allow`は`commandActions`、ポリシー候補、要求コマンドの順で追加対象を抽出し、安全な先頭環境変数代入を除去して`config.json`へ保存します。保存成功後に実行中の許可リストへ反映して`accept`を返し、保存失敗時は承認待ちを維持します。未対応形式のサーバー要求は自動承認せず、エラー応答します。
 

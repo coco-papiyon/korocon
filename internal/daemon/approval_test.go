@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -88,5 +90,55 @@ func TestCommandRequestAllowedRejectsInvalidRequest(t *testing.T) {
 	}
 	if commandRequestAllowed(json.RawMessage(`{"command":"go test ./..."}`), nil) {
 		t.Fatal("expected empty allowlist to reject command")
+	}
+}
+
+func TestCopilotPathRequestAllowed(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := filepath.ToSlash(filepath.Join(home, ".copilot", "session-state", "11ca99f2-0e72-4358-a7fb-609d71c64a95", "plan.md"))
+	allowed := []string{"~/.copilot/session-state/*/plan.md"}
+	params, _ := json.Marshal(map[string]any{"rawInput": map[string]string{"path": plan}})
+	if !copilotPathRequestAllowed(params, allowed) {
+		t.Fatal("expected Copilot plan path to be allowed")
+	}
+	params, _ = json.Marshal(map[string]any{"rawInput": map[string]string{"fileName": plan}})
+	if !copilotPathRequestAllowed(params, allowed) {
+		t.Fatal("expected Copilot plan fileName to be allowed")
+	}
+	params, _ = json.Marshal(map[string]any{"rawInput": map[string]string{"path": filepath.Join(home, ".ssh", "config")}})
+	if copilotPathRequestAllowed(params, allowed) {
+		t.Fatal("expected path outside Copilot session state to be rejected")
+	}
+}
+
+func TestCopilotDiffRequestRequiresEveryTargetToBeAllowed(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := filepath.ToSlash(filepath.Join(home, ".copilot", "session-state", "session-1", "plan.md"))
+	diff := "diff --git a" + plan + " b" + plan + "\n--- a/dev/null\n+++ b" + plan + "\n"
+	params, _ := json.Marshal(map[string]any{"rawInput": map[string]string{"diff": diff, "fileName": plan}})
+	allowed := []string{"~/.copilot/session-state/*/plan.md"}
+	if !copilotPathRequestAllowed(params, allowed) {
+		t.Fatal("expected Copilot plan diff to be allowed")
+	}
+	params, _ = json.Marshal(map[string]any{"rawInput": map[string]string{"diff": diff, "fileName": filepath.Join(home, ".ssh", "config")}})
+	if copilotPathRequestAllowed(params, allowed) {
+		t.Fatal("expected allowed diff with mismatched fileName to be rejected")
+	}
+
+	other := filepath.ToSlash(filepath.Join(home, ".ssh", "config"))
+	mixed := diff + "diff --git a" + other + " b" + other + "\n"
+	params, _ = json.Marshal(map[string]any{"rawInput": map[string]string{"diff": mixed}})
+	if copilotPathRequestAllowed(params, allowed) {
+		t.Fatal("expected mixed diff targets to be rejected")
+	}
+	params, _ = json.Marshal(map[string]any{"rawInput": map[string]string{"diff": "not a unified diff"}})
+	if copilotPathRequestAllowed(params, allowed) {
+		t.Fatal("expected diff without target headers to be rejected")
 	}
 }

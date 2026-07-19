@@ -27,6 +27,8 @@ go build -o ./korocon ./cmd/korocon
 
 `builtinAllowedCommands`へコマンドを追加する場合は`korocon config allow "go test ./..."`を実行します。引数を省略すると追加するコマンドを対話入力できます。
 
+Copilotの自動承認パスは`korocon config allow-path "~/.copilot/session-state/*/plan.md"`で`builtinAllowedPaths`へ追加できます。
+
 ```json
 {
   "workspaceName": ".workspace",
@@ -42,7 +44,8 @@ go build -o ./korocon ./cmd/korocon
   "reviewerProvider": "copilot",
   "reviewerModel": "claude-sonnet-4.5",
   "reviewer": "octocat",
-  "builtinAllowedCommands": ["git add", "git diff", "git status", "go test"]
+  "builtinAllowedCommands": ["git add", "git diff", "git status", "go test"],
+  "builtinAllowedPaths": ["~/.copilot/session-state/*/plan.md"]
 }
 ```
 
@@ -116,6 +119,7 @@ printf '%s\n' 'テストの不足箇所を調べて' > /tmp/korocon-prompts
 ## 注意事項
 
 - `builtinAllowedCommands`に一致する安全なコマンド実行要求は自動承認します。省略または空配列の場合はkorobokcleと同じ既定リストです。
+- `builtinAllowedPaths`に一致するCopilotのパス要求と、全変更対象が一致するdiff要求は自動承認します。
 - 許可外の承認要求が表示された場合は未入力Enterまたは`/approve`で今回だけ承認し、`/allow`で承認して`config.json`の自動承認リストへ追加し、`/decline`で拒否します。
 - CLIはプロンプトをシェルに渡しませんが、AI CLIにはそのまま渡されます。
 - FIFOやCLIの標準出力には、必要に応じて適切なUnix権限を設定してください。
