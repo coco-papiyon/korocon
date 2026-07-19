@@ -82,6 +82,22 @@ func TestPRReviewOffersRetryAfterFailedJob(t *testing.T) {
 	}
 }
 
+func TestPRReviewOffersRetryForPersistedFailure(t *testing.T) {
+	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReviewFailed}
+	var out bytes.Buffer
+	controller := newPRReviewController(workflow, &out, nil, nil, nil, nil, nil)
+	if controller.InitialPrompt() != "" || controller.InitialJob() != nil {
+		t.Fatalf("failed PR started automatically: prompt=%q job=%+v", controller.InitialPrompt(), controller.InitialJob())
+	}
+	if !strings.Contains(out.String(), "1. 続きから再実行") || !strings.Contains(out.String(), "2. 最初から再実行") || !strings.Contains(out.String(), "3. モデルを変更") {
+		t.Fatalf("failure options were not displayed: %q", out.String())
+	}
+	action, err := controller.HandleInput(context.Background(), "1")
+	if err != nil || !action.Handled || action.Prompt != workflow.Prompt() {
+		t.Fatalf("unexpected retry action=%+v err=%v", action, err)
+	}
+}
+
 func TestPRReviewApprovalMovesToVerificationAndCompletesWhenClosed(t *testing.T) {
 	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
 	var out bytes.Buffer

@@ -15,10 +15,13 @@ import (
 type Phase string
 
 const (
-	PhaseDesign              Phase = "design"
-	PhaseImplementation      Phase = "implementation"
-	PhaseDesignReady         Phase = "design_ready"
-	PhaseImplementationReady Phase = "implementation_ready"
+	PhaseDesign               Phase = "design"
+	PhaseImplementation       Phase = "implementation"
+	PhaseDesignReady          Phase = "design_ready"
+	PhaseImplementationReady  Phase = "implementation_ready"
+	PhaseDesignFailed         Phase = "design_failed"
+	PhaseImplementationFailed Phase = "implementation_failed"
+	PhaseFailed               Phase = "failed"
 )
 
 const (
@@ -29,7 +32,8 @@ const (
 	labelImplementationReady    = "state:implementation_ready"
 	labelImplementationApproved = "state:implementation_approved"
 	labelPRCreated              = "state:pr_created"
-	labelFailed                 = "state:failed"
+	labelDesignFailed           = "state:design_failed"
+	labelImplementationFailed   = "state:implementation_failed"
 )
 
 var stateLabels = map[string]struct{}{
@@ -45,6 +49,7 @@ var stateLabels = map[string]struct{}{
 	"state:review_fix_implementation_approved": {}, "state:review_fixed": {},
 	"state:review_running": {}, "state:review_ready": {},
 	"state:review_approved": {}, "state:completed": {}, "state:failed": {},
+	"state:design_failed": {}, "state:implementation_failed": {},
 }
 
 type Label struct {
@@ -154,6 +159,14 @@ func load(ctx context.Context, workingDir string, number int, workspaceName stri
 		return nil, err
 	}
 	workflow := &Workflow{dir: workingDir, runner: runner, Issue: selected, Phase: phase, workspaceName: workspaceName}
+	if phase == PhaseFailed {
+		implementationDir := filepath.Join(workingDir, workspaceName, "implementation", strconv.Itoa(number))
+		if _, statErr := os.Stat(implementationDir); statErr == nil {
+			workflow.Phase = PhaseImplementationFailed
+		} else {
+			workflow.Phase = PhaseDesignFailed
+		}
+	}
 	if phase == PhaseDesignReady || phase == PhaseImplementationReady {
 		resultPath, pathErr := workflow.artifactPath()
 		if pathErr != nil {
@@ -180,6 +193,12 @@ func classify(labels []Label) (Phase, error) {
 		return false
 	}
 	switch {
+	case has("state:implementation_failed"):
+		return PhaseImplementationFailed, nil
+	case has("state:design_failed"):
+		return PhaseDesignFailed, nil
+	case has("state:failed"):
+		return PhaseFailed, nil
 	case has("state:implementation_ready"):
 		return PhaseImplementationReady, nil
 	case has("state:implementation_approved"), has("state:pr_created"):
@@ -282,12 +301,14 @@ func (w *Workflow) Start(ctx context.Context) error {
 }
 
 func (w *Workflow) Finish(ctx context.Context, runErr error) error {
-	label := labelFailed
+	label := labelDesignFailed
 	if runErr == nil {
 		label = labelDesignReady
 		if w.Phase == PhaseImplementation {
 			label = labelImplementationReady
 		}
+	} else if w.Phase == PhaseImplementation {
+		label = labelImplementationFailed
 	}
 	return w.setStateLabel(ctx, label)
 }
@@ -313,7 +334,7 @@ func (w *Workflow) SaveResult(result string) (string, error) {
 }
 
 func (w *Workflow) Approve(ctx context.Context, result string) (string, error) {
-	if w.Phase == PhaseImplementation || w.Phase == PhaseImplementationReady {
+	if w.Phase == PhaseImplementation || w.Phase == PhaseImplementationReady || w.Phase == PhaseImplementationFailed {
 		if w.publishImplementation == nil {
 			return "", errors.New("implementation publisher is not configured")
 		}

@@ -210,6 +210,24 @@ func TestIssueReviewFeedbackStartsTrackedRevision(t *testing.T) {
 	}
 }
 
+func TestIssueReviewOffersRetryForPersistedFailure(t *testing.T) {
+	workflow := &fakeReviewWorkflow{number: 16, prompt: "implement", phase: issueworkflow.PhaseImplementationFailed}
+	var out bytes.Buffer
+	controller := newIssueReviewController(workflow, issueworkflow.PhaseImplementationFailed, &out, func(prompt string) *daemon.JobSpec {
+		return &daemon.JobSpec{Prompt: prompt}
+	}, nil)
+	if controller.InitialPrompt() != "" || controller.InitialJob() != nil {
+		t.Fatalf("failed issue started automatically: prompt=%q job=%+v", controller.InitialPrompt(), controller.InitialJob())
+	}
+	if !strings.Contains(out.String(), "1. 続きから再実行") || !strings.Contains(out.String(), "2. 最初から再実行") || !strings.Contains(out.String(), "3. モデルを変更") {
+		t.Fatalf("failure options were not displayed: %q", out.String())
+	}
+	action, err := controller.HandleInput(context.Background(), "1")
+	if err != nil || !action.Handled || action.Job == nil || action.Job.Prompt != "implement" {
+		t.Fatalf("unexpected retry action=%+v err=%v", action, err)
+	}
+}
+
 func TestIssueReviewOffersRetryAfterFailedJob(t *testing.T) {
 	workflow := &fakeReviewWorkflow{number: 2, prompt: "design"}
 	var out bytes.Buffer

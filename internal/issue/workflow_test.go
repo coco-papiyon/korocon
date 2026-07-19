@@ -131,7 +131,7 @@ func TestWorkflowFinishesWithReadyOrFailedLabel(t *testing.T) {
 	}{
 		{PhaseDesign, false, labelDesignReady},
 		{PhaseImplementation, false, labelImplementationReady},
-		{PhaseImplementation, true, labelFailed},
+		{PhaseImplementation, true, labelImplementationFailed},
 	} {
 		runner := &fakeRunner{responses: []string{`{}`, `{"labels":[]}`, `{}`}}
 		workflow := &Workflow{dir: ".", runner: runner, Issue: Issue{Number: 13}, Phase: test.phase}

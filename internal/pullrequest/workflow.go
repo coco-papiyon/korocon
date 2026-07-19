@@ -23,6 +23,9 @@ const (
 	PhaseFix            Phase = "review_fix_implementation"
 	PhaseConflict       Phase = "pr_conflict"
 	PhaseVerification   Phase = "verification"
+	PhaseReviewFailed   Phase = "review_failed"
+	PhaseFixFailed      Phase = "review_fix_failed"
+	PhaseConflictFailed Phase = "pr_conflict_failed"
 )
 
 var stateLabels = map[string]struct{}{
@@ -37,6 +40,7 @@ var stateLabels = map[string]struct{}{
 	"state:review_fix_implementation_approved": {}, "state:review_fixed": {},
 	"state:review_running": {}, "state:review_ready": {},
 	"state:review_approved": {}, "state:completed": {}, "state:failed": {},
+	"state:review_failed": {}, "state:review_fix_failed": {}, "state:pr_conflict_failed": {},
 }
 
 type Label struct {
@@ -273,7 +277,7 @@ func (w *Workflow) Start(ctx context.Context) error {
 }
 
 func (w *Workflow) Finish(ctx context.Context, runErr error) error {
-	label := "state:failed"
+	label := "state:review_failed"
 	if runErr == nil {
 		label = "state:review_ready"
 		if w.Phase == PhaseFix {
@@ -281,6 +285,10 @@ func (w *Workflow) Finish(ctx context.Context, runErr error) error {
 		} else if w.Phase == PhaseConflict {
 			label = "state:pr_conflict_ready"
 		}
+	} else if w.Phase == PhaseFix {
+		label = "state:review_fix_failed"
+	} else if w.Phase == PhaseConflict {
+		label = "state:pr_conflict_failed"
 	}
 	return w.setStateLabel(ctx, label)
 }
@@ -500,6 +508,16 @@ func PullRequestHasLabel(pr PullRequest, target string) bool {
 }
 
 func pullRequestPhase(pr PullRequest) Phase {
+	for _, label := range pr.Labels {
+		switch strings.ToLower(strings.TrimSpace(label.Name)) {
+		case "state:review_failed", "state:failed":
+			return PhaseReviewFailed
+		case "state:review_fix_failed":
+			return PhaseFixFailed
+		case "state:pr_conflict_failed":
+			return PhaseConflictFailed
+		}
+	}
 	if HasConflict(pr) || PullRequestHasLabel(pr, "state:pr_conflict") {
 		return PhaseConflict
 	}

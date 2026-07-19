@@ -946,7 +946,7 @@ func selectIssueForRole(ctx context.Context, reader *bufio.Reader, out io.Writer
 func issueIsImplementerTarget(issue issueworkflow.Issue) bool {
 	for _, label := range issue.Labels {
 		switch strings.ToLower(strings.TrimSpace(label.Name)) {
-		case "state:design_ready", "state:implementation_ready", "state:implementation_approved", "state:pr_created", "state:failed":
+		case "state:design_ready", "state:implementation_ready", "state:implementation_approved", "state:pr_created":
 			return false
 		}
 	}
@@ -960,6 +960,9 @@ func issueStatus(issue issueworkflow.Issue) string {
 			"state:design_approved":        "実装待ち",
 			"state:implementation_running": "実装中",
 			"state:implementation_ready":   "実装完了・承認待ち",
+			"state:design_failed":          "設計失敗・再実行待ち",
+			"state:implementation_failed":  "実装失敗・再実行待ち",
+			"state:failed":                 "失敗・再実行待ち",
 			"state:review_fix":             "レビュー修正",
 			"state:pr_review_comment":      "PRレビュー指摘あり",
 		}[name]; ok {
@@ -972,6 +975,8 @@ func issueStatus(issue issueworkflow.Issue) string {
 func issuePhaseName(phase issueworkflow.Phase) string {
 	switch phase {
 	case issueworkflow.PhaseImplementation, issueworkflow.PhaseImplementationReady:
+		return "実装"
+	case issueworkflow.PhaseImplementationFailed:
 		return "実装"
 	default:
 		return "設計"
@@ -1246,7 +1251,7 @@ func selectPullRequestForRole(ctx context.Context, reader *bufio.Reader, out io.
 func pullRequestIsRoleTarget(pr prworkflow.PullRequest, mode selectionMode) bool {
 	switch mode {
 	case selectionModeImplementer:
-		return prworkflow.HasConflict(pr) || prworkflow.PullRequestHasLabel(pr, "state:pr_conflict") || prworkflow.PullRequestHasLabel(pr, "state:pr_review_comment") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_design_running") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_design_ready") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_design_approved") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_implementation_running") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_implementation_ready") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_implementation_approved")
+		return prworkflow.HasConflict(pr) || prworkflow.PullRequestHasLabel(pr, "state:pr_conflict") || prworkflow.PullRequestHasLabel(pr, "state:pr_review_comment") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_design_running") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_design_ready") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_design_approved") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_implementation_running") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_implementation_ready") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_implementation_approved") || prworkflow.PullRequestHasLabel(pr, "state:review_failed") || prworkflow.PullRequestHasLabel(pr, "state:review_fix_failed") || prworkflow.PullRequestHasLabel(pr, "state:pr_conflict_failed") || prworkflow.PullRequestHasLabel(pr, "state:failed")
 	case selectionModeReviewer:
 		return (!pullRequestHasStateLabel(pr) || prworkflow.PullRequestHasLabel(pr, "state:review_fixed")) && !prworkflow.HasConflict(pr) && !prworkflow.PullRequestHasLabel(pr, "state:pr_conflict")
 	default:
@@ -1271,13 +1276,19 @@ func pullRequestPhaseName(phase prworkflow.Phase) string {
 		return "レビュー指摘修正"
 	case prworkflow.PhaseReviewApproved:
 		return "レビュー指摘承認済み"
+	case prworkflow.PhaseReviewFailed:
+		return "レビュー失敗・再実行待ち"
+	case prworkflow.PhaseFixFailed:
+		return "レビュー修正失敗・再実行待ち"
+	case prworkflow.PhaseConflictFailed:
+		return "コンフリクト解消失敗・再実行待ち"
 	default:
 		return "レビュー"
 	}
 }
 
 func pullRequestAI(phase prworkflow.Phase, implementer, reviewer aiSelection) aiSelection {
-	if phase == prworkflow.PhaseReview || phase == prworkflow.PhaseReviewApproved || phase == prworkflow.PhaseVerification {
+	if phase == prworkflow.PhaseReview || phase == prworkflow.PhaseReviewApproved || phase == prworkflow.PhaseVerification || phase == prworkflow.PhaseReviewFailed {
 		return reviewer
 	}
 	return implementer
@@ -1307,6 +1318,9 @@ var pullRequestStateNames = map[string]string{
 	"state:review_running":                     "レビュー中",
 	"state:review_ready":                       "レビュー完了・承認待ち",
 	"state:review_approved":                    "レビュー承認済み",
+	"state:review_failed":                      "レビュー失敗・再実行待ち",
+	"state:review_fix_failed":                  "レビュー修正失敗・再実行待ち",
+	"state:pr_conflict_failed":                 "コンフリクト解消失敗・再実行待ち",
 	"state:completed":                          "完了",
 	"state:failed":                             "失敗",
 }

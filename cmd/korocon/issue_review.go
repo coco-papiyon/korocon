@@ -64,6 +64,19 @@ func newIssueReviewController(workflow reviewWorkflow, phase issueworkflow.Phase
 		closeImplementation: closeImplementation,
 	}
 	c.registerPrompt(workflow.Prompt())
+	if phase == issueworkflow.PhaseDesignFailed || phase == issueworkflow.PhaseImplementationFailed || phase == issueworkflow.PhaseFailed {
+		c.failed = true
+		c.failedPrompt = workflow.Prompt()
+		if phase == issueworkflow.PhaseImplementationFailed {
+			c.phase = issueworkflow.PhaseImplementation
+			workflow.SetPhase(issueworkflow.PhaseImplementation)
+		} else {
+			c.phase = issueworkflow.PhaseDesign
+			workflow.SetPhase(issueworkflow.PhaseDesign)
+		}
+		c.prompts[workflow.Prompt()] = 0
+		_, _ = fmt.Fprintln(out, failureOptions())
+	}
 	if phase == issueworkflow.PhaseDesignReady || phase == issueworkflow.PhaseImplementationReady {
 		if provider, ok := workflow.(interface{ PendingApprovalResult() string }); ok {
 			c.result = provider.PendingApprovalResult()
@@ -82,13 +95,16 @@ func newIssueReviewController(workflow reviewWorkflow, phase issueworkflow.Phase
 }
 
 func (c *issueReviewController) InitialJob() *daemon.JobSpec {
-	if c.phase != issueworkflow.PhaseImplementation || c.implementationJob == nil {
+	if c.failed || c.phase != issueworkflow.PhaseImplementation || c.implementationJob == nil {
 		return nil
 	}
 	return c.implementationJob(c.workflow.Prompt())
 }
 
 func (c *issueReviewController) InitialPrompt() string {
+	if c.failed {
+		return ""
+	}
 	if c.phase == issueworkflow.PhaseDesignReady || c.phase == issueworkflow.PhaseImplementationReady {
 		return ""
 	}

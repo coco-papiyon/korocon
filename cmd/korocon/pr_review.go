@@ -66,7 +66,22 @@ type prWorkflow interface {
 
 func newPRReviewController(workflow prWorkflow, out io.Writer, fixJob, conflictJob func(string) *daemon.JobSpec, closeFix func() error, startVerification func(context.Context) (string, error), closeVerification func() error) *prReviewController {
 	c := &prReviewController{workflow: workflow, out: out, fixJob: fixJob, conflictJob: conflictJob, closeFix: closeFix, startVerification: startVerification, closeVerification: closeVerification, prompts: make(map[string]int), jobs: make(map[uint64]struct{})}
-	if workflow.CurrentPhase() == prworkflow.PhaseFix {
+	phase := workflow.CurrentPhase()
+	if phase == prworkflow.PhaseReviewFailed || phase == prworkflow.PhaseFixFailed || phase == prworkflow.PhaseConflictFailed {
+		c.failed = true
+		switch phase {
+		case prworkflow.PhaseFixFailed:
+			c.failedPrompt = workflow.FixPrompt("")
+			workflow.SetPhase(prworkflow.PhaseFix)
+		case prworkflow.PhaseConflictFailed:
+			c.failedPrompt = workflow.ConflictPrompt("")
+			workflow.SetPhase(prworkflow.PhaseConflict)
+		default:
+			c.failedPrompt = workflow.Prompt()
+			workflow.SetPhase(prworkflow.PhaseReview)
+		}
+		_, _ = fmt.Fprintln(out, failureOptions())
+	} else if workflow.CurrentPhase() == prworkflow.PhaseFix {
 		c.awaitingFixInput = true
 	} else {
 		c.prompts[c.initialPrompt()]++
@@ -77,6 +92,9 @@ func newPRReviewController(workflow prWorkflow, out io.Writer, fixJob, conflictJ
 func (c *prReviewController) InitialPrompt() string { return c.initialPrompt() }
 
 func (c *prReviewController) initialPrompt() string {
+	if c.failed {
+		return ""
+	}
 	if c.workflow.CurrentPhase() == prworkflow.PhaseReviewApproved {
 		return ""
 	}
@@ -90,6 +108,9 @@ func (c *prReviewController) initialPrompt() string {
 }
 
 func (c *prReviewController) InitialJob() *daemon.JobSpec {
+	if c.failed {
+		return nil
+	}
 	switch c.workflow.CurrentPhase() {
 	case prworkflow.PhaseConflict:
 		if c.conflictJob != nil {
