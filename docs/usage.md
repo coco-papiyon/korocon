@@ -97,7 +97,7 @@ cat prompt.md | go run ./cmd/korocon
 
 ## 対話型CLIとしての実行
 
-`korocon`は起動時に選択Providerを1回だけ起動してから標準入力を待機します。Codexは`codex --config sandbox_workspace_write.network_access=true app-server --stdio`、Copilotは`copilot --acp --stdio --model <model>`で起動します。CopilotにはACPセッション作成直後に`/ide`を送り、以後の指示も同じACPセッションへNDJSONで送ります。各入力を同じ会話へ順番に送り、AIの最終結果を画面に表示します。通常時の空行は送信しませんが、Issueの承認待ちでは空行を承認として扱います。JSONイベントと標準エラーはログファイルへリアルタイム追記します。
+`korocon`は起動時に選択Providerを1回だけ起動してから標準入力を待機します。Codexは`codex --config sandbox_workspace_write.network_access=true app-server --stdio`、Copilotは`copilot --acp --stdio --model <model>`で起動します。Copilotには入力受付開始後の最初のターン直前に`/ide`を送り、以後の指示も同じACPセッションへNDJSONで送ります。各入力を同じ会話へ順番に送り、AIの最終結果を画面に表示します。通常時の空行は送信しませんが、Issueの承認待ちでは空行を承認として扱います。JSONイベントと標準エラーはログファイルへリアルタイム追記します。
 
 CLI自身の論理メッセージは、AI本文と区別するため`---`の後に各行`[システム] `を付けて表示します。`[job N]`や`[承認待ち]`など既に明確な状態表示には二重の接頭辞を付けず、区切り線も連続させません。AI本文は変更せず、入力プロンプトは従来どおり`> `です。
 

@@ -20,6 +20,26 @@ func TestCopilotACPArgs(t *testing.T) {
 	}
 }
 
+func TestStartCopilotSessionDoesNotPromptBeforeInputLoopStarts(t *testing.T) {
+	oldCommand := copilotACPCommand
+	copilotACPCommand = func(ctx context.Context, _ string, _ string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestCopilotACPHelperProcess")
+		cmd.Env = append(os.Environ(), "KOROCON_COPILOT_ACP_HELPER=1", "KOROCON_COPILOT_REJECT_PROMPT=1")
+		return cmd
+	}
+	defer func() { copilotACPCommand = oldCommand }()
+
+	session, err := StartCopilotSession(context.Background(), SessionConfig{
+		WorkingDir: t.TempDir(), LogErr: io.Discard,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestStartAgentSessionKeepsOneCopilotACPProcess(t *testing.T) {
 	oldCommand := copilotACPCommand
 	starts := 0
@@ -174,6 +194,10 @@ func TestCopilotACPHelperProcess(t *testing.T) {
 		case "session/new":
 			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]string{"sessionId": "session-1"}})
 		case "session/prompt":
+			if os.Getenv("KOROCON_COPILOT_REJECT_PROMPT") == "1" {
+				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "error": map[string]any{"code": -32602, "message": "prompt sent during session startup"}})
+				continue
+			}
 			promptCount++
 			var params struct {
 				SessionID string `json:"sessionId"`

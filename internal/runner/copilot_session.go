@@ -22,6 +22,7 @@ type CopilotSession struct {
 	logOut        io.Writer
 	handleRequest ServerRequestHandler
 	sessionID     string
+	ideEnabled    bool
 	nextID        atomic.Int64
 	writeMu       sync.Mutex
 	pendingMu     sync.Mutex
@@ -117,10 +118,6 @@ func StartCopilotSession(ctx context.Context, cfg SessionConfig) (*CopilotSessio
 		return nil, errors.New("create Copilot ACP session: response did not include a session id")
 	}
 	s.sessionID = created.SessionID
-	if _, err := s.runTurn(ctx, "/ide", nil); err != nil {
-		_ = s.Close()
-		return nil, fmt.Errorf("enable Copilot IDE mode: %w", err)
-	}
 	return s, nil
 }
 
@@ -129,6 +126,9 @@ func (s *CopilotSession) RunTurn(ctx context.Context, prompt, model string, onEv
 	defer s.turnMu.Unlock()
 	if strings.TrimSpace(prompt) == "" {
 		return TurnResult{}, errors.New("prompt is empty")
+	}
+	if err := s.enableIDE(ctx, onEvent); err != nil {
+		return TurnResult{}, err
 	}
 	if strings.TrimSpace(model) != "" {
 		if _, err := s.runTurn(ctx, "/model "+model, onEvent); err != nil {
@@ -144,9 +144,23 @@ func (s *CopilotSession) SetModel(ctx context.Context, model string) error {
 	if strings.TrimSpace(model) == "" {
 		return errors.New("model is empty")
 	}
+	if err := s.enableIDE(ctx, nil); err != nil {
+		return err
+	}
 	if _, err := s.runTurn(ctx, "/model "+model, nil); err != nil {
 		return fmt.Errorf("update Copilot model: %w", err)
 	}
+	return nil
+}
+
+func (s *CopilotSession) enableIDE(ctx context.Context, onEvent func()) error {
+	if s.ideEnabled {
+		return nil
+	}
+	if _, err := s.runTurn(ctx, "/ide", onEvent); err != nil {
+		return fmt.Errorf("enable Copilot IDE mode: %w", err)
+	}
+	s.ideEnabled = true
 	return nil
 }
 

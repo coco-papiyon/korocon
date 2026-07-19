@@ -4,7 +4,7 @@ Go から OpenAI Codex CLI などの AI CLI を起動するための薄いオー
 
 利用するProviderに応じてOpenAI Codex CLIまたはGitHub Copilot CLIをインストールし、ログインしてください。GitHub操作にはGitHub CLI (`gh`)も必要です。
 
-CLIを起動すると選択したAI CLIを常駐プロセスとして1回だけ起動し、入力待ちになります。Codexはapp-server、CopilotはACPサーバーを使用し、標準入力から受けた指示を同じセッションへJSONLで順番に送ります。Copilotはセッション作成直後に`/ide`を実行してVS Code連携を有効化します。JSONイベントと標準エラーは`korocon.log`へ追記し、Ctrl+CでCLIとAIを停止します。
+CLIを起動すると選択したAI CLIを常駐プロセスとして1回だけ起動し、入力待ちになります。Codexはapp-server、CopilotはACPサーバーを使用し、標準入力から受けた指示を同じセッションへJSONLで順番に送ります。Copilotは入力受付開始後、最初のターン直前に`/ide`を実行してVS Code連携を有効化します。JSONイベントと標準エラーは`korocon.log`へ追記し、Ctrl+CでCLIとAIを停止します。
 
 各ジョブの開始前に対象リポジトリで`git fetch --prune origin`と`git pull --ff-only`を実行します。同期に失敗した場合はAIジョブを開始せず、エラーを表示します。
 
