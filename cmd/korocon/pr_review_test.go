@@ -98,6 +98,28 @@ func TestPRReviewOffersRetryForPersistedFailure(t *testing.T) {
 	}
 }
 
+func TestPRReviewPersistedFailureUsesSystemMessageFormatForEveryFailurePhase(t *testing.T) {
+	for _, phase := range []prworkflow.Phase{
+		prworkflow.PhaseReviewFailed,
+		prworkflow.PhaseFixFailed,
+		prworkflow.PhaseConflictFailed,
+	} {
+		t.Run(string(phase), func(t *testing.T) {
+			workflow := &fakePRWorkflow{phase: phase}
+			var out bytes.Buffer
+			newPRReviewController(workflow, &out, nil, nil, nil, nil, nil)
+
+			got := out.String()
+			if !strings.HasPrefix(got, "---\n[システム] 失敗したジョブの処理を選択してください。\n") {
+				t.Fatalf("persisted failure message did not use system format: %q", got)
+			}
+			if !strings.Contains(got, "[システム] 3. モデルを変更") {
+				t.Fatalf("persisted failure options were incomplete: %q", got)
+			}
+		})
+	}
+}
+
 func TestPRReviewApprovalMovesToVerificationAndCompletesWhenClosed(t *testing.T) {
 	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
 	var out bytes.Buffer
