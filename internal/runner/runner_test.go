@@ -57,7 +57,7 @@ func TestAvailableModelsOrder(t *testing.T) {
 }
 
 func TestAvailableCopilotModelsIncludesAuto(t *testing.T) {
-	expected := []string{"auto", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5-mini", "cloade-sonnet-4.6", "claude-opus-4.6"}
+	expected := []string{"auto", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5-mini", "claude-sonnet-4.6", "claude-opus-4.6"}
 	if strings.Join(AvailableCopilotModels, "\n") != strings.Join(expected, "\n") {
 		t.Fatalf("unexpected Copilot model choices: %v", AvailableCopilotModels)
 	}
