@@ -80,7 +80,7 @@ func newPRReviewController(workflow prWorkflow, out io.Writer, fixJob, conflictJ
 			c.failedPrompt = workflow.Prompt()
 			workflow.SetPhase(prworkflow.PhaseReview)
 		}
-		_, _ = fmt.Fprintln(out, failureOptions())
+		_, _ = fmt.Fprintln(c.out, failureOptions())
 	} else if workflow.CurrentPhase() == prworkflow.PhaseFix {
 		c.awaitingFixInput = true
 	} else {

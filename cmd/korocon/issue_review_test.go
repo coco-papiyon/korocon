@@ -219,7 +219,7 @@ func TestIssueReviewOffersRetryForPersistedFailure(t *testing.T) {
 	if controller.InitialPrompt() != "" || controller.InitialJob() != nil {
 		t.Fatalf("failed issue started automatically: prompt=%q job=%+v", controller.InitialPrompt(), controller.InitialJob())
 	}
-	if !strings.Contains(out.String(), "1. 続きから再実行") || !strings.Contains(out.String(), "2. 最初から再実行") || !strings.Contains(out.String(), "3. モデルを変更") {
+	if got := out.String(); !strings.Contains(got, "---\n[システム] 失敗したジョブの処理を選択してください。\n[システム] 1. 続きから再実行") || !strings.Contains(got, "[システム] 2. 最初から再実行") || !strings.Contains(got, "[システム] 3. モデルを変更") {
 		t.Fatalf("failure options were not displayed: %q", out.String())
 	}
 	action, err := controller.HandleInput(context.Background(), "1")

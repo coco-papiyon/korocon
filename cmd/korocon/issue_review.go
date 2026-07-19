@@ -75,7 +75,7 @@ func newIssueReviewController(workflow reviewWorkflow, phase issueworkflow.Phase
 			workflow.SetPhase(issueworkflow.PhaseDesign)
 		}
 		c.prompts[workflow.Prompt()] = 0
-		_, _ = fmt.Fprintln(out, failureOptions())
+		_, _ = fmt.Fprintln(c.out, failureOptions())
 	}
 	if phase == issueworkflow.PhaseDesignReady || phase == issueworkflow.PhaseImplementationReady {
 		if provider, ok := workflow.(interface{ PendingApprovalResult() string }); ok {
