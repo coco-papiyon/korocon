@@ -32,7 +32,8 @@ func TestCommandRequestAllowedWithSafeArguments(t *testing.T) {
 		{name: "safe or chain", command: "command -v code || command -v codium || true", allowed: true},
 		{name: "stderr redirect", command: "go test -count=1 ./... 2>&1", allowed: true},
 		{name: "quoted pipe", command: `grep -rn "claude-opus\\|gpt-5\\.6-sol" .`, allowed: true},
-		{name: "pipeline", command: "git add . | rm -rf .", allowed: false},
+		{name: "safe pipeline", command: "git diff --stat | head -20", allowed: true},
+		{name: "unsafe pipeline", command: "git add . | rm -rf .", allowed: false},
 		{name: "chain", command: "git diff --stat && rm -rf .", allowed: false},
 		{name: "unclosed quote", command: `grep "value`, allowed: false},
 		{name: "redirection", command: "git status > status.txt", allowed: false},
@@ -45,7 +46,7 @@ func TestCommandRequestAllowedWithSafeArguments(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := commandRequestAllowed(params, []string{"cd", "command -v", "true", "grep", "git add", "git diff", "git status", "go test"})
+			got := commandRequestAllowed(params, []string{"cd", "command -v", "true", "grep", "head", "git add", "git diff", "git status", "go test"})
 			if got != test.allowed {
 				t.Fatalf("commandRequestAllowed(%q) = %v, want %v", test.command, got, test.allowed)
 			}
@@ -92,16 +93,30 @@ func TestRequestedCopilotCommandsAreAllowed(t *testing.T) {
 	}
 }
 
-func TestRequestedCopilotWorktreePathIsAllowed(t *testing.T) {
-	params, err := json.Marshal(map[string]any{"rawInput": map[string]string{
-		"path": "/home/coco/dev/go/src/github.com/coco-papiyon/korocon-branches/korocon-21/cmd/korocon/config_test.go",
-	}})
-	if err != nil {
-		t.Fatal(err)
+func TestAdditionalRequestedCopilotCommandsAreAllowed(t *testing.T) {
+	allowed := []string{
+		"cd", "grep", "rg", "head", "echo", "true",
+		"git --no-pager grep", "git --no-pager log", "git --no-pager show", "git --no-pager status",
 	}
-	allowed := []string{"~/dev/go/src/github.com/coco-papiyon/korocon-branches/*/cmd/korocon/config_test.go"}
-	if !copilotPathRequestAllowed(params, allowed) {
-		t.Fatal("expected requested worktree path to be allowed")
+	worktree := "/home/coco/dev/go/src/github.com/coco-papiyon/korocon-branches/korocon-21"
+	commands := []string{
+		`cd ` + worktree + ` && git --no-pager log --oneline -5 && grep -rn "cloade" . --include="*.go" --include="*.md" 2>/dev/null`,
+		"cd " + worktree + " && git --no-pager log --oneline -8 && git --no-pager status",
+		`cd ` + worktree + ` && grep -rn "cloade\|claude-sonnet-4\.6" README.md docs/ cmd/ internal/ 2>/dev/null | head -30`,
+		`cd ` + worktree + ` && git --no-pager show --stat HEAD && echo "---" && git --no-pager show HEAD -- internal/runner/runner.go | head -20`,
+		`cd ` + worktree + ` && git --no-pager show HEAD:internal/runner/runner.go | grep -n "cloade\|claude"`,
+		`cd ` + worktree + ` && git --no-pager grep -n "cloade" -- '*.go' '*.md' 2>/dev/null || echo "旧表記なし"`,
+		`cd ` + worktree + ` && git --no-pager status --short && echo '---' && git --no-pager grep -n "cloade-sonnet-4.6" || true && echo '---' && rg -n "AvailableCopilotModels|claude-sonnet-4.6" internal/runner/runner.go internal/runner/runner_test.go cmd/korocon/config_test.go README.md docs/usage.md docs/design.md`,
+		"cd " + worktree + " && git --no-pager status --short",
+	}
+	for _, command := range commands {
+		params, err := json.Marshal(map[string]string{"command": command})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !commandRequestAllowed(params, allowed) {
+			t.Errorf("expected command to be allowed: %s", command)
+		}
 	}
 }
 

@@ -329,7 +329,7 @@ func (e *Engine) ensureStarted(ctx context.Context, model string, handleRequest 
 	common := runner.SessionConfig{
 		Provider: e.cfg.Provider, Binary: e.cfg.Binary, Model: model, WorkingDir: worktree,
 		LogOut: e.cfg.LogOut, LogErr: e.cfg.LogErr, HandleRequest: handleRequest,
-		ApprovalPolicy: "on-request",
+		ApprovalPolicy: "on-request", ApproveWorkingDirPaths: true,
 	}
 	common.Sandbox = "workspace-write"
 	implementer, err := startImplementationSession(ctx, common)

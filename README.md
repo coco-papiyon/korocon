@@ -48,7 +48,7 @@ korocon config allow-path "~/.copilot/session-state/*/plan.md"
 
 `reviewer`にはGitHub上のレビュー担当ユーザーを指定します。実装承認後に新しいPRを作成すると、PRのassigneeには現在のGitHubユーザー（`@me`）を設定し、`reviewer`が設定されている場合はそのユーザーへレビューを依頼します。
 
-`builtinAllowedCommands`を省略した場合はkorobokcleと同じ既定コマンドを使用します。`builtinAllowedPaths`の既定値は`~/.copilot/session-state/*/plan.md`です。Copilotの`path`または`fileName`が一致する要求と、変更対象の全パスが一致するdiff要求を自動承認します。許可外の操作は自動拒否せず、手動承認へ進みます。
+`builtinAllowedCommands`を省略した場合は既定コマンドを使用します。`builtinAllowedPaths`の既定値は`~/.copilot/session-state/*/plan.md`です。Copilotの`path`または`fileName`が一致する要求と、変更対象の全パスが一致するdiff要求を自動承認します。Issue実装・検証用Copilotセッションでは、実際に作成または再利用した実装worktree配下も自動承認します。許可外の操作は自動拒否せず、手動承認へ進みます。
 
 起動直後にGitHubから取得する情報を`ISSUE`または`PR`で選択します。入力は大文字・小文字を区別せず、`i`/`I`と`p`/`P`だけでも指定できます。未入力Enterは`ISSUE`です。`ISSUE`を選んで番号を入力すると、Issue本文・ラベル・コメントを取得し、状態ラベルに応じて設計または実装をCodexへ自動投入します。`PR`を選ぶとMERGEDまたはDraftを除外したPR一覧を番号・ステータス・タイトルの表形式で表示し、指定したPRのレビューを開始します。PRがない場合やIssueがopenでない場合はISSUE/PR選択へ戻ります。この機能には認証済みのGitHub CLI (`gh`) が必要です。
 

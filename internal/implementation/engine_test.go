@@ -163,8 +163,8 @@ func TestEngineRepeatsImplementationUntilVerificationPasses(t *testing.T) {
 	if strings.Join(phases, ",") != "実装1回目,検証1回目,実装2回目,検証2回目" {
 		t.Fatalf("phases = %v", phases)
 	}
-	if len(configs) != 2 || configs[0].Provider != "copilot" || configs[0].Model != "gpt-test" || configs[0].Sandbox != "workspace-write" ||
-		configs[1].Provider != "codex" || configs[1].Model != "gpt-verifier" || configs[1].Sandbox != "read-only" {
+	if len(configs) != 2 || configs[0].Provider != "copilot" || configs[0].Model != "gpt-test" || configs[0].Sandbox != "workspace-write" || !configs[0].ApproveWorkingDirPaths ||
+		configs[1].Provider != "codex" || configs[1].Model != "gpt-verifier" || configs[1].Sandbox != "read-only" || !configs[1].ApproveWorkingDirPaths {
 		t.Fatalf("session configs = %+v", configs)
 	}
 	artifacts := map[string]string{

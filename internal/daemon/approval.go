@@ -152,11 +152,11 @@ func splitSafeCommandChain(command string) ([]string, bool) {
 				return nil, false
 			}
 		case '2':
-			if strings.HasPrefix(command[i:], "2>&1") && shellTokenBoundary(command, i-1) && shellTokenBoundary(command, i+4) {
-				i += 3
+			if end, ok := allowedStderrRedirectionAt(command, i); ok {
+				i = end - 1
 			}
-		case '&', '|':
-			if i+1 >= len(command) || command[i+1] != ch {
+		case '&':
+			if i+1 >= len(command) || command[i+1] != '&' {
 				return nil, false
 			}
 			part := strings.TrimSpace(command[start:i])
@@ -165,6 +165,16 @@ func splitSafeCommandChain(command string) ([]string, bool) {
 			}
 			commands = append(commands, part)
 			i++
+			start = i + 1
+		case '|':
+			part := strings.TrimSpace(command[start:i])
+			if part == "" {
+				return nil, false
+			}
+			commands = append(commands, part)
+			if i+1 < len(command) && command[i+1] == '|' {
+				i++
+			}
 			start = i + 1
 		case '>', '<':
 			return nil, false
@@ -181,7 +191,22 @@ func splitSafeCommandChain(command string) ([]string, bool) {
 }
 
 func shellTokenBoundary(command string, index int) bool {
-	return index < 0 || index >= len(command) || command[index] == ' ' || command[index] == '\t'
+	return index < 0 || index >= len(command) || strings.ContainsRune(" \t&|", rune(command[index]))
+}
+
+func allowedStderrRedirectionAt(command string, start int) (int, bool) {
+	if !shellTokenBoundary(command, start-1) {
+		return 0, false
+	}
+	for _, redirect := range []string{"2>&1", "2>/dev/null", "2> /dev/null", "2>NUL", "2> NUL"} {
+		if strings.HasPrefix(command[start:], redirect) {
+			end := start + len(redirect)
+			if shellTokenBoundary(command, end) {
+				return end, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func safeCommandArguments(arguments string) bool {

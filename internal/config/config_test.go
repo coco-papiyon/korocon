@@ -140,9 +140,10 @@ func TestDefaultAllowedCommandsMatchesKorobokcle(t *testing.T) {
 	want := []string{
 		"npm install", "npm ci", "npm test",
 		"go build", "go test", "go mod tidy", "go mod download",
-		"git log", "git add", "git commit", "git diff", "git status", "git stash", "git --no-pager diff", "git --no-pager grep",
+		"git log", "git add", "git commit", "git diff", "git status", "git stash",
+		"git --no-pager diff", "git --no-pager grep", "git --no-pager log", "git --no-pager show", "git --no-pager status",
 		"command -v", "cd", "true",
-		"ls", "dir", "cat", "type", "more", "head", "echo", "sed", "set", "pwd", "grep", "find", "tee", "wc",
+		"ls", "dir", "cat", "type", "more", "head", "echo", "sed", "set", "pwd", "grep", "rg", "find", "tee", "wc",
 		"get-childitem", "get-content", "select-object", "select-string",
 	}
 	if got := DefaultAllowedCommands(); !reflect.DeepEqual(got, want) {

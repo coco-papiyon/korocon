@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,23 +16,25 @@ import (
 
 // CopilotSession owns one Copilot ACP process and one conversation session.
 type CopilotSession struct {
-	ctx           context.Context
-	cancel        context.CancelFunc
-	cmd           *exec.Cmd
-	stdin         io.WriteCloser
-	logOut        io.Writer
-	handleRequest ServerRequestHandler
-	sessionID     string
-	ideEnabled    bool
-	nextID        atomic.Int64
-	writeMu       sync.Mutex
-	pendingMu     sync.Mutex
-	pending       map[int64]chan rpcMessage
-	turnMu        sync.Mutex
-	events        chan rpcMessage
-	done          chan struct{}
-	errMu         sync.Mutex
-	processErr    error
+	ctx                    context.Context
+	cancel                 context.CancelFunc
+	cmd                    *exec.Cmd
+	stdin                  io.WriteCloser
+	logOut                 io.Writer
+	handleRequest          ServerRequestHandler
+	sessionID              string
+	workingDir             string
+	approveWorkingDirPaths bool
+	ideEnabled             bool
+	nextID                 atomic.Int64
+	writeMu                sync.Mutex
+	pendingMu              sync.Mutex
+	pending                map[int64]chan rpcMessage
+	turnMu                 sync.Mutex
+	events                 chan rpcMessage
+	done                   chan struct{}
+	errMu                  sync.Mutex
+	processErr             error
 }
 
 var copilotACPCommand = func(ctx context.Context, binary string, model string) *exec.Cmd {
@@ -79,6 +82,7 @@ func StartCopilotSession(ctx context.Context, cfg SessionConfig) (*CopilotSessio
 	s := &CopilotSession{
 		ctx: processCtx, cancel: cancel, cmd: cmd, stdin: stdin,
 		logOut: writerOrDiscard(cfg.LogOut), handleRequest: cfg.HandleRequest,
+		workingDir: dir, approveWorkingDirPaths: cfg.ApproveWorkingDirPaths,
 		pending: make(map[int64]chan rpcMessage), events: make(chan rpcMessage, 256),
 		done: make(chan struct{}),
 	}
@@ -366,8 +370,10 @@ func (s *CopilotSession) handleServerRequest(message rpcMessage) {
 		return
 	}
 	decision := "decline"
-	if s.handleRequest != nil {
-		command := copilotApprovalCommand(params.ToolCall.RawInput)
+	command := copilotApprovalCommand(params.ToolCall.RawInput)
+	if command == "" && s.approveWorkingDirPaths && copilotRequestWithinWorkingDir(params.ToolCall.RawInput, s.workingDir) {
+		decision = "accept"
+	} else if s.handleRequest != nil {
 		method := "item/commandExecution/requestApproval"
 		var translated []byte
 		if command != "" {
@@ -399,6 +405,82 @@ func (s *CopilotSession) handleServerRequest(message rpcMessage) {
 	}
 	response["result"] = map[string]any{"outcome": map[string]string{"outcome": "cancelled"}}
 	_ = s.write(response)
+}
+
+func copilotRequestWithinWorkingDir(rawInput map[string]any, workingDir string) bool {
+	root, err := filepath.Abs(workingDir)
+	if err != nil {
+		return false
+	}
+	var targets []string
+	for _, key := range []string{"path", "fileName"} {
+		if target, ok := rawInput[key].(string); ok && strings.TrimSpace(target) != "" {
+			targets = append(targets, target)
+		}
+	}
+	if diff, ok := rawInput["diff"].(string); ok && strings.TrimSpace(diff) != "" {
+		diffTargets := copilotDiffTargets(diff)
+		if len(diffTargets) == 0 {
+			return false
+		}
+		targets = append(targets, diffTargets...)
+	}
+	if len(targets) == 0 {
+		return false
+	}
+	for _, target := range targets {
+		if !pathWithinWorkingDir(root, target) {
+			return false
+		}
+	}
+	return true
+}
+
+func copilotDiffTargets(diff string) []string {
+	var targets []string
+	for _, line := range strings.Split(diff, "\n") {
+		if !strings.HasPrefix(line, "diff --git ") {
+			continue
+		}
+		fields := strings.Fields(strings.TrimPrefix(line, "diff --git "))
+		if len(fields) != 2 {
+			return nil
+		}
+		for _, target := range fields {
+			target = strings.TrimPrefix(strings.TrimPrefix(target, "a/"), "b/")
+			if target == "" || target == "/dev/null" {
+				return nil
+			}
+			targets = append(targets, target)
+		}
+	}
+	return targets
+}
+
+func pathWithinWorkingDir(root, target string) bool {
+	target = filepath.Clean(strings.TrimSpace(target))
+	candidates := []string{target}
+	if !filepath.IsAbs(target) {
+		rootParts := strings.Split(strings.TrimPrefix(filepath.ToSlash(root), "/"), "/")
+		targetSlash := filepath.ToSlash(target)
+		if len(rootParts) > 0 && rootParts[0] != "" && strings.HasPrefix(targetSlash, rootParts[0]+"/") {
+			// Copilot renders absolute diff paths as a/home/... and b/home/....
+			candidates = []string{string(filepath.Separator) + target}
+		} else {
+			candidates = []string{filepath.Join(root, target)}
+		}
+	}
+	for _, candidate := range candidates {
+		absolute, err := filepath.Abs(candidate)
+		if err != nil {
+			continue
+		}
+		relative, err := filepath.Rel(root, absolute)
+		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 func copilotApprovalCommand(raw map[string]any) string {

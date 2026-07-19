@@ -19,15 +19,16 @@ type ServerRequestHandler func(context.Context, string, json.RawMessage) (any, e
 
 // SessionConfig controls a resident Codex app-server process.
 type SessionConfig struct {
-	Provider       string
-	Binary         string
-	Model          string
-	WorkingDir     string
-	LogOut         io.Writer
-	LogErr         io.Writer
-	HandleRequest  ServerRequestHandler
-	Sandbox        string
-	ApprovalPolicy string
+	Provider               string
+	Binary                 string
+	Model                  string
+	WorkingDir             string
+	LogOut                 io.Writer
+	LogErr                 io.Writer
+	HandleRequest          ServerRequestHandler
+	Sandbox                string
+	ApprovalPolicy         string
+	ApproveWorkingDirPaths bool
 }
 
 // TurnResult is the final output of one turn in a resident Codex thread.

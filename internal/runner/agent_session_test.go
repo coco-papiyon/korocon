@@ -20,6 +20,30 @@ func TestCopilotACPArgs(t *testing.T) {
 	}
 }
 
+func TestCopilotRequestWithinWorkingDir(t *testing.T) {
+	root := "/home/coco/dev/korocon-branches/korocon-21"
+	tests := []struct {
+		name string
+		raw  map[string]any
+		want bool
+	}{
+		{name: "absolute path", raw: map[string]any{"path": root + "/cmd/korocon/config_test.go"}, want: true},
+		{name: "relative path", raw: map[string]any{"fileName": "internal/runner/runner.go"}, want: true},
+		{name: "outside path", raw: map[string]any{"path": "/home/coco/.ssh/config"}, want: false},
+		{name: "parent traversal", raw: map[string]any{"path": "../korocon/config.json"}, want: false},
+		{name: "worktree diff", raw: map[string]any{"diff": "diff --git a/internal/runner/runner.go b/internal/runner/runner.go\n"}, want: true},
+		{name: "absolute worktree diff", raw: map[string]any{"diff": "diff --git a/home/coco/dev/korocon-branches/korocon-21/README.md b/home/coco/dev/korocon-branches/korocon-21/README.md\n"}, want: true},
+		{name: "mixed diff", raw: map[string]any{"diff": "diff --git a/README.md b/README.md\ndiff --git a/home/coco/.ssh/config b/home/coco/.ssh/config\n"}, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := copilotRequestWithinWorkingDir(test.raw, root); got != test.want {
+				t.Fatalf("copilotRequestWithinWorkingDir() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestStartCopilotSessionDoesNotPromptBeforeInputLoopStarts(t *testing.T) {
 	oldCommand := copilotACPCommand
 	copilotACPCommand = func(ctx context.Context, _ string, _ string) *exec.Cmd {
@@ -171,6 +195,41 @@ func TestCopilotACPForwardsPathPermissionSeparately(t *testing.T) {
 	}
 }
 
+func TestCopilotACPAutomaticallyApprovesImplementationWorktreePath(t *testing.T) {
+	oldCommand := copilotACPCommand
+	copilotACPCommand = func(ctx context.Context, _ string, _ string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestCopilotACPHelperProcess")
+		cmd.Env = append(os.Environ(), "KOROCON_COPILOT_ACP_HELPER=1")
+		return cmd
+	}
+	defer func() { copilotACPCommand = oldCommand }()
+
+	handlerCalled := false
+	session, err := StartCopilotSession(context.Background(), SessionConfig{
+		WorkingDir: t.TempDir(), LogErr: io.Discard, ApproveWorkingDirPaths: true,
+		HandleRequest: func(context.Context, string, json.RawMessage) (any, error) {
+			handlerCalled = true
+			return map[string]string{"decision": "decline"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := session.RunTurn(context.Background(), "worktree-path-permission", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if handlerCalled {
+		t.Fatal("worktree path was sent to the manual approval handler")
+	}
+	if result.Text != "permission:allow-once" {
+		t.Fatalf("result = %q", result.Text)
+	}
+}
+
 func TestCopilotACPCollectsAllChunksBeforeTurnResponse(t *testing.T) {
 	oldCommand := copilotACPCommand
 	copilotACPCommand = func(ctx context.Context, _ string, _ string) *exec.Cmd {
@@ -249,10 +308,12 @@ func TestCopilotACPHelperProcess(t *testing.T) {
 				model = strings.TrimPrefix(prompt, "/model ")
 			}
 			answer := "command:" + prompt
-			if prompt == "permission" || prompt == "path-permission" {
+			if prompt == "permission" || prompt == "path-permission" || prompt == "worktree-path-permission" {
 				rawInput := map[string]string{"command": "go test ./..."}
 				if prompt == "path-permission" {
 					rawInput = map[string]string{"path": "/tmp/copilot/session/plan.md"}
+				} else if prompt == "worktree-path-permission" {
+					rawInput = map[string]string{"path": "internal/runner/runner.go"}
 				}
 				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": 99, "method": "session/request_permission", "params": map[string]any{
 					"sessionId": params.SessionID,
@@ -272,7 +333,7 @@ func TestCopilotACPHelperProcess(t *testing.T) {
 				}
 			}
 			if !strings.HasPrefix(prompt, "/") {
-				if prompt != "permission" && prompt != "path-permission" {
+				if prompt != "permission" && prompt != "path-permission" && prompt != "worktree-path-permission" {
 					answer = fmt.Sprintf("answer:%s model:%s", prompt, model)
 				}
 			}
