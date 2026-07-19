@@ -103,7 +103,7 @@ GitHub Projects v2のフィルタは`--project <番号>`、`--project-owner <own
 
 `os.Executable`から実行バイナリのディレクトリを求め、同じディレクトリの`config.json`を読みます。ファイルがない場合は`workspaceName: .workspace`を使用します。不正なJSON、未知の設定項目、パスとして解釈できる`workspaceName`は起動エラーです。
 
-`korocon config init`は`baseBranch`、`branchNamePattern`、`startupCommand`を対話入力し、空入力を既定値として扱います。続けて共通のモデル設定処理を呼び出し、実装者・検証者・レビューアのProviderとModelを設定してから一度だけ保存します。モデル候補は各役割で選択されたProviderから解決し、Copilotは`auto`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5-mini`、`cloade-sonnet-4.6`、`claude-opus-4.6`を表示します。Copilotの既定値は`auto`で、具体的なモデル名は直接入力も許可します。ProviderをCodexからCopilotへ変更した場合、空入力時のModel既定値は`auto`です。既存ファイルは`--force`なしでは上書きしません。`korocon config model`は同じモデル設定処理を既存設定へ適用します。
+`korocon config init`は`baseBranch`、`branchNamePattern`、`startupCommand`を対話入力し、空入力を既定値として扱います。続けて共通のモデル設定処理を呼び出し、実装者・検証者・レビューアのProviderとModelを設定してから一度だけ保存します。モデル候補は各役割で選択されたProviderから解決し、Copilotは`auto`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5-mini`、`claude-sonnet-4.6`、`claude-opus-4.6`を表示します。Copilotの既定値は`auto`で、具体的なモデル名は直接入力も許可します。ProviderをCodexからCopilotへ変更した場合、空入力時のModel既定値は`auto`です。既存ファイルは`--force`なしでは上書きしません。`korocon config model`は同じモデル設定処理を既存設定へ適用します。
 
 `korocon config allow [COMMAND]`は既存の自動承認コマンド正規化処理を使って`builtinAllowedCommands`へ追加し、重複時は設定ファイルを書き換えません。引数がない場合は標準入力からコマンドを対話取得します。
 
