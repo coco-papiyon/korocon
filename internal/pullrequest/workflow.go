@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/coco-papiyon/korocon/internal/workflowstate"
 )
 
 type Phase string
@@ -137,9 +139,25 @@ func List(ctx context.Context, workingDir string) ([]PullRequest, error) {
 }
 
 func ListWithSearch(ctx context.Context, workingDir, search string) ([]PullRequest, error) {
-	args := []string{"pr", "list", "--state", "all", "--limit", "100", "--json", "number,title,state,isDraft,reviewDecision,mergeable,mergeStateStatus,headRefName,baseRefName,url,labels,assignees,author"}
-	if strings.TrimSpace(search) != "" {
-		args = append(args, "--search", strings.TrimSpace(search))
+	return ListWithOptions(ctx, workingDir, PullRequestListOptions{State: "all", Search: search})
+}
+
+type PullRequestListOptions struct {
+	State  string
+	Search string
+}
+
+func ListWithOptions(ctx context.Context, workingDir string, options PullRequestListOptions) ([]PullRequest, error) {
+	state := strings.ToLower(strings.TrimSpace(options.State))
+	if state == "" {
+		state = "open"
+	}
+	if state != "open" && state != "closed" && state != "all" {
+		return nil, fmt.Errorf("invalid pull request state %q", options.State)
+	}
+	args := []string{"pr", "list", "--state", state, "--limit", "100", "--json", "number,title,state,isDraft,reviewDecision,mergeable,mergeStateStatus,headRefName,baseRefName,url,labels,assignees,author"}
+	if strings.TrimSpace(options.Search) != "" {
+		args = append(args, "--search", strings.TrimSpace(options.Search))
 	}
 	raw, err := ghCommandRunner{}.Run(ctx, workingDir, args...)
 	if err != nil {
@@ -171,7 +189,10 @@ func load(ctx context.Context, workingDir string, number int, workspaceName stri
 	if isClosed(pr.State) {
 		return nil, fmt.Errorf("PR #%dは%sです", number, strings.ToUpper(pr.State))
 	}
-	phase := pullRequestPhase(pr)
+	phase, err := loadPhase(pr, workingDir)
+	if err != nil {
+		return nil, err
+	}
 	return &Workflow{dir: workingDir, workspaceName: workspaceName, runner: runner, PR: pr, Phase: phase}, nil
 }
 
@@ -273,7 +294,7 @@ func (w *Workflow) Start(ctx context.Context) error {
 	} else if w.Phase == PhaseConflict {
 		label = "state:pr_conflict_running"
 	}
-	return w.setStateLabel(ctx, label)
+	return w.setState(ctx, label)
 }
 
 func (w *Workflow) Finish(ctx context.Context, runErr error) error {
@@ -290,7 +311,7 @@ func (w *Workflow) Finish(ctx context.Context, runErr error) error {
 	} else if w.Phase == PhaseConflict {
 		label = "state:pr_conflict_failed"
 	}
-	return w.setStateLabel(ctx, label)
+	return w.setState(ctx, label)
 }
 
 func (w *Workflow) SetPhase(phase Phase) { w.Phase = phase }
@@ -484,7 +505,7 @@ func (w *Workflow) ApproveReview(ctx context.Context, _ string) error {
 	if err := w.comment(ctx, withTopLevelHeading("レビュー結果", artifact)); err != nil {
 		return err
 	}
-	return w.setStateLabel(ctx, "state:review_approved")
+	return w.setState(ctx, "state:review_approved")
 }
 
 func (w *Workflow) RequestChanges(ctx context.Context, _ string, instruction string) error {
@@ -496,7 +517,7 @@ func (w *Workflow) RequestChanges(ctx context.Context, _ string, instruction str
 	if err := w.comment(ctx, body); err != nil {
 		return err
 	}
-	return w.setStateLabel(ctx, "state:pr_review_comment")
+	return w.setState(ctx, "state:pr_review_comment")
 }
 
 func (w *Workflow) ApproveFix(ctx context.Context, _ string) error {
@@ -513,7 +534,7 @@ func (w *Workflow) ApproveFix(ctx context.Context, _ string) error {
 	if err := w.comment(ctx, withTopLevelHeading("レビュー指摘修正結果", artifact)); err != nil {
 		return err
 	}
-	return w.setStateLabel(ctx, "state:review_fixed")
+	return w.setState(ctx, "state:review_fixed")
 }
 
 func (w *Workflow) ApproveConflict(ctx context.Context, _ string) error {
@@ -530,7 +551,7 @@ func (w *Workflow) ApproveConflict(ctx context.Context, _ string) error {
 	if err := w.comment(ctx, withTopLevelHeading("コンフリクト解消結果", artifact)); err != nil {
 		return err
 	}
-	return w.setStateLabel(ctx, "state:pr_conflict_resolved")
+	return w.setState(ctx, "state:pr_conflict_resolved")
 }
 
 func HasConflict(pr PullRequest) bool {
@@ -592,7 +613,7 @@ func (w *Workflow) CompleteIfClosed(ctx context.Context) (bool, string, error) {
 	if state != "CLOSED" && state != "MERGED" {
 		return false, state, nil
 	}
-	if err := w.setStateLabel(ctx, "state:completed"); err != nil {
+	if err := w.setState(ctx, "state:completed"); err != nil {
 		return false, state, err
 	}
 	return true, state, nil
@@ -606,34 +627,62 @@ func (w *Workflow) comment(ctx context.Context, body string) error {
 	return nil
 }
 
-func (w *Workflow) setStateLabel(ctx context.Context, target string) error {
-	if _, err := w.runner.Run(ctx, w.dir, "label", "create", target, "--color", "0E8A16", "--description", "korobokcle state label", "--force"); err != nil {
-		return fmt.Errorf("ensure label %s: %w", target, err)
-	}
-	raw, err := w.runner.Run(ctx, w.dir, "pr", "view", strconv.Itoa(w.PR.Number), "--json", "labels")
+func loadPhase(pr PullRequest, workingDir string) (Phase, error) {
+	key := pullRequestStateKey(pr, workingDir)
+	state, found, err := workflowstate.Get(key)
 	if err != nil {
-		return err
+		return "", err
 	}
-	var current struct {
-		Labels []Label `json:"labels"`
+	if found {
+		return pullRequestPhase(PullRequest{Labels: []Label{{Name: state}}, Mergeable: pr.Mergeable, MergeStateStatus: pr.MergeStateStatus}), nil
 	}
-	if err := json.Unmarshal(raw, &current); err != nil {
-		return fmt.Errorf("decode PR labels: %w", err)
+	phase := pullRequestPhase(pr)
+	if err := workflowstate.Set(key, pullRequestStateForPhase(phase)); err != nil {
+		return "", err
 	}
-	args := []string{"pr", "edit", strconv.Itoa(w.PR.Number), "--add-label", target}
-	for _, label := range current.Labels {
-		name := strings.TrimSpace(label.Name)
-		if strings.EqualFold(name, target) {
-			continue
+	return phase, nil
+}
+
+func pullRequestStateForPhase(phase Phase) string {
+	switch phase {
+	case PhaseReviewApproved:
+		return "state:review_approved"
+	case PhaseFix:
+		return "state:pr_review_comment"
+	case PhaseConflict:
+		return "state:pr_conflict"
+	case PhaseReviewFailed:
+		return "state:review_failed"
+	case PhaseFixFailed:
+		return "state:review_fix_failed"
+	case PhaseConflictFailed:
+		return "state:pr_conflict_failed"
+	default:
+		return "state:review_running"
+	}
+}
+
+func (w *Workflow) setState(_ context.Context, target string) error {
+	return workflowstate.Set(pullRequestStateKey(w.PR, w.dir), target)
+}
+
+func pullRequestStateKey(pr PullRequest, workingDir string) workflowstate.Key {
+	return workflowstate.Key{Repository: repositoryID(pr.URL, workingDir), Kind: "pull_request", Number: pr.Number}
+}
+
+func repositoryID(resourceURL, workingDir string) string {
+	parsed, err := url.Parse(strings.TrimSpace(resourceURL))
+	if err == nil && strings.EqualFold(parsed.Host, "github.com") {
+		parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+		if len(parts) >= 2 && parts[0] != "" && parts[1] != "" {
+			return "github.com/" + parts[0] + "/" + parts[1]
 		}
-		if _, ok := stateLabels[strings.ToLower(name)]; ok {
-			args = append(args, "--remove-label", name)
-		}
 	}
-	if _, err := w.runner.Run(ctx, w.dir, args...); err != nil {
-		return fmt.Errorf("update PR state label: %w", err)
+	abs, err := filepath.Abs(workingDir)
+	if err == nil {
+		return "file://" + filepath.ToSlash(abs)
 	}
-	return nil
+	return "file://" + filepath.ToSlash(workingDir)
 }
 
 func isClosed(state string) bool {

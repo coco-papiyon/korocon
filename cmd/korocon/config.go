@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	appconfig "github.com/coco-papiyon/korocon/internal/config"
@@ -51,6 +52,8 @@ func runConfig(args []string, in io.Reader, out, stderr io.Writer) error {
 		}
 		_, err = fmt.Fprintf(out, "モデル設定を保存しました。\nconfig: %s\n", path)
 		return err
+	case "set":
+		return setConfigValue(args[1:], out)
 	case "list":
 		if len(args) != 1 {
 			return errors.New("config list does not accept arguments")
@@ -93,6 +96,31 @@ func runConfig(args []string, in io.Reader, out, stderr io.Writer) error {
 	}
 }
 
+func setConfigValue(args []string, out io.Writer) error {
+	if len(args) == 0 || (len(args) == 1 && (args[0] == "help" || args[0] == "--help")) {
+		_, err := fmt.Fprintln(out, "Usage: korocon config set <key> <value>")
+		return err
+	}
+	if len(args) < 2 {
+		return errors.New("config set requires a key and value")
+	}
+	key := strings.TrimSpace(args[0])
+	value := strings.TrimSpace(strings.Join(args[1:], " "))
+	configured, path, err := appconfig.Load()
+	if err != nil {
+		return err
+	}
+	updated, err := appconfig.SetValue(configured, key, value)
+	if err != nil {
+		return err
+	}
+	if err := appconfig.Save(path, updated); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "設定を更新しました: %s = %s\nconfig: %s\n", key, value, path)
+	return err
+}
+
 func printConfigList(out io.Writer, path string, configured appconfig.Config) error {
 	if _, err := fmt.Fprintf(out, "設定一覧\nconfig: %s\n\n", path); err != nil {
 		return err
@@ -107,6 +135,7 @@ func printConfigList(out io.Writer, path string, configured appconfig.Config) er
 		{"implementationDirectory", configured.ImplementationDirectory},
 		{"implementationLoopCount", fmt.Sprint(configured.ImplementationLoopCount)},
 		{"autoPollingInterval", configured.AutoPollingInterval},
+		{"runtimeVerificationEnabled", strconv.FormatBool(configured.RuntimeVerificationEnabled)},
 		{"startupCommand", configured.StartupCommand},
 		{"implementerProvider", configured.ImplementerProvider},
 		{"implementerModel", configured.ImplementerModel},
@@ -401,6 +430,7 @@ func printConfigUsage(out io.Writer) {
   korocon config init [--force]
   korocon config list
   korocon config model
+  korocon config set <KEY> <VALUE>
   korocon config allow [COMMAND]
   korocon config allow-path [GLOB]
 
@@ -408,6 +438,7 @@ Commands:
   init   interactively create config.json
   list   display all settings
   model  interactively update provider and model settings
+  set    update one scalar setting
   allow  add a command to builtinAllowedCommands
   allow-path  add a path glob to builtinAllowedPaths
 `)

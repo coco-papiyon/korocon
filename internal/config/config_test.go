@@ -27,6 +27,9 @@ func TestLoadFileUsesDefaultWhenMissing(t *testing.T) {
 	if configured.AutoPollingInterval != "5m" {
 		t.Fatalf("autoPollingInterval = %q", configured.AutoPollingInterval)
 	}
+	if !configured.RuntimeVerificationEnabled {
+		t.Fatal("runtimeVerificationEnabled = false, want true")
+	}
 	if !reflect.DeepEqual(configured.BuiltinAllowedCommands, DefaultAllowedCommands()) {
 		t.Fatalf("builtinAllowedCommands = %+v", configured.BuiltinAllowedCommands)
 	}
@@ -35,6 +38,45 @@ func TestLoadFileUsesDefaultWhenMissing(t *testing.T) {
 	}
 	if configured.ImplementerProvider != "codex" || configured.ImplementerModel != "gpt-5.6-luna" || configured.VerifierProvider != "" || configured.ReviewerProvider != "" {
 		t.Fatalf("role defaults = %+v", configured)
+	}
+}
+
+func TestSetValueUpdatesScalarSettings(t *testing.T) {
+	configured := Default()
+	for _, test := range []struct {
+		key   string
+		value string
+		check func(Config) bool
+	}{
+		{"autoPollingInterval", "30s", func(c Config) bool { return c.AutoPollingInterval == "30s" }},
+		{"implementationLoopCount", "5", func(c Config) bool { return c.ImplementationLoopCount == 5 }},
+		{"runtimeVerificationEnabled", "false", func(c Config) bool { return !c.RuntimeVerificationEnabled }},
+		{"reviewerProvider", "inherit", func(c Config) bool { return c.ReviewerProvider == "" }},
+		{"startupCommand", "go test ./...", func(c Config) bool { return c.StartupCommand == "go test ./..." }},
+	} {
+		var err error
+		configured, err = SetValue(configured, test.key, test.value)
+		if err != nil || !test.check(configured) {
+			t.Fatalf("SetValue(%q, %q) = %+v, err=%v", test.key, test.value, configured, err)
+		}
+	}
+}
+
+func TestSetValueRejectsInvalidValues(t *testing.T) {
+	for _, test := range []struct {
+		key   string
+		value string
+	}{
+		{"autoPollingInterval", "0s"},
+		{"autoPollingInterval", "not-duration"},
+		{"implementationLoopCount", "11"},
+		{"runtimeVerificationEnabled", "enabled"},
+		{"workspaceName", "../outside"},
+		{"unknown", "value"},
+	} {
+		if _, err := SetValue(Default(), test.key, test.value); err == nil {
+			t.Fatalf("SetValue(%q, %q) accepted invalid value", test.key, test.value)
+		}
 	}
 }
 

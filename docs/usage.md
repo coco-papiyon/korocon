@@ -27,11 +27,28 @@ go build -o ./korocon ./cmd/korocon
 korocon config init
 korocon config init --force  # 既存config.jsonを再初期化
 korocon config model         # モデル設定だけを変更
+korocon config set autoPollingInterval 10m
+korocon config set implementationLoopCount 5
 korocon config allow "go test ./..."
 korocon config allow-path "~/.copilot/session-state/*/plan.md"
 ```
 
 `korocon config allow [COMMAND]`は`builtinAllowedCommands`へコマンドを追加します。`korocon config allow-path [GLOB]`は`builtinAllowedPaths`へCopilotの自動承認対象パスを追加します。引数を省略した場合は対話入力になります。
+
+`korocon config set <KEY> <VALUE>`は設定ファイルの単一値を変更します。`autoPollingInterval`は`5m`や`30s`などの正のduration、`implementationLoopCount`は1〜10を指定します。Providerには`codex`、`copilot`、検証者・レビューアには`inherit`を指定できます。配列設定は`config allow`または`config allow-path`を使用してください。
+
+### Issue/PR一覧
+
+IssueとPRの一覧は、AIを起動せずにサブコマンドで表示できます。工程状態は表示せず、GitHubから取得したIssue/PR情報だけを表示します。
+
+```sh
+korocon list issue
+korocon list pr
+korocon list issue --state all --label backend
+korocon list pr --search 'is:open' --json
+```
+
+`--state`は`open`（既定）、`closed`、`all`を指定できます。PRは`--state open`の場合、Draftを除外します。`--label`、`--exclude-label`、`--title`、`--author`は複数指定でき、`--json`を指定するとJSON配列を出力します。
 
 ```text
 tools/
@@ -47,6 +64,7 @@ tools/
   "implementationLoopCount": 3,
   "autoPollingInterval": "5m",
   "baseBranch": "main",
+  "runtimeVerificationEnabled": true,
   "implementerProvider": "codex",
   "implementerModel": "gpt-5.6-luna",
   "verifierProvider": "codex",
@@ -69,7 +87,8 @@ tools/
 | `implementationLoopCount` | `3` | Issue実装およびPRレビュー指摘修正の実装・検証の最大試行回数。最大10回です。 |
 | `autoPollingInterval` | `5m` | `--auto`で対象がない場合に再取得するまでの待機期間です。`30s`、`5m`、`1h`などの正の期間を指定します。 |
 | `baseBranch` | `main` | 実装承認時に作成するPRのbaseブランチです。 |
-| `startupCommand` | 未設定 | レビュー承認後にPR headのworktreeで自動起動する動作確認コマンドです。標準出力と標準エラーはログファイルへ記録します。 |
+| `runtimeVerificationEnabled` | `true` | レビュー承認後にレビューアへPR head worktreeでの動作確認を指示するか指定します。 |
+| `startupCommand` | 未設定 | 動作確認が有効な場合にPR head worktreeで追加起動するコマンドです。標準出力と標準エラーはログファイルへ記録します。 |
 | `builtinAllowedCommands` | korobokcleと同じ既定リスト | Codexのコマンド実行要求を自動承認するコマンドです。省略または空配列では既定リストを使用します。 |
 | `builtinAllowedPaths` | `~/.copilot/session-state/*/plan.md` | Copilotのパス・diff要求を自動承認するglobです。diffは全変更対象が一致する場合だけ承認します。 |
 | `implementerProvider` | `codex` | 設計、実装、レビュー指摘修正を担当するProviderです。 |
@@ -199,7 +218,7 @@ AIが指摘を出した場合、または利用者がレビュー修正指示を
 
 Issueの設計・実装、PRレビュー指摘修正、PRコンフリクト解消は実装者を使用します。Issue実装とPRレビュー指摘修正の検証は検証者、PRレビューと動作確認はレビューアを使用します。担当が変わる工程は同じAIプロセスで連続実行しません。
 
-レビュー承認後、`startupCommand`が設定されていればPR head用worktreeを再度最新化し、そのディレクトリでコマンドを自動起動して`state:review_approved`として動作確認を待ちます。動作確認を完了してPRをクローズまたはマージした後、未入力Enterまたは`/check`を入力します。PRがCLOSEDまたはMERGEDならコマンドを停止して`state:completed`へ更新し、最初の`issue`/`pr`選択へ戻ります。OPENの場合は動作確認待ちを継続します。`startupCommand`が未設定の場合は「動作確認後にPRをマージしてください。」という案内とPR URLを表示してPR処理を終了し、最初の選択へ戻ります。
+レビュー承認後、`runtimeVerificationEnabled`が`true`ならPR head用worktreeを再度最新化し、レビューアのCodexまたはCopilotへ同worktreeでの動作確認を指示します。`startupCommand`が設定されていれば同じworktreeでコマンドも自動起動します。動作確認を完了してPRをクローズまたはマージした後、未入力Enterまたは`/check`を入力します。PRがCLOSEDまたはMERGEDならコマンドを停止して`state:completed`へ更新し、最初の`issue`/`pr`選択へ戻ります。OPENの場合は動作確認待ちを継続します。`runtimeVerificationEnabled`が`false`なら動作確認を省略してPR処理を終了します。
 
 ### Issueの状態遷移
 

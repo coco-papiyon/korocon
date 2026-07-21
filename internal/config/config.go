@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -17,22 +18,23 @@ const FileName = "config.json"
 const defaultImplementationDirectory = "../<リポジトリ名>-branches/"
 
 type Config struct {
-	WorkspaceName           string   `json:"workspaceName"`
-	BranchNamePattern       string   `json:"branchNamePattern"`
-	ImplementationDirectory string   `json:"implementationDirectory"`
-	ImplementationLoopCount int      `json:"implementationLoopCount"`
-	AutoPollingInterval     string   `json:"autoPollingInterval"`
-	BaseBranch              string   `json:"baseBranch"`
-	StartupCommand          string   `json:"startupCommand,omitempty"`
-	BuiltinAllowedCommands  []string `json:"builtinAllowedCommands"`
-	BuiltinAllowedPaths     []string `json:"builtinAllowedPaths"`
-	ImplementerProvider     string   `json:"implementerProvider"`
-	ImplementerModel        string   `json:"implementerModel"`
-	VerifierProvider        string   `json:"verifierProvider,omitempty"`
-	VerifierModel           string   `json:"verifierModel,omitempty"`
-	ReviewerProvider        string   `json:"reviewerProvider,omitempty"`
-	ReviewerModel           string   `json:"reviewerModel,omitempty"`
-	Reviewer                string   `json:"reviewer,omitempty"`
+	WorkspaceName              string   `json:"workspaceName"`
+	BranchNamePattern          string   `json:"branchNamePattern"`
+	ImplementationDirectory    string   `json:"implementationDirectory"`
+	ImplementationLoopCount    int      `json:"implementationLoopCount"`
+	AutoPollingInterval        string   `json:"autoPollingInterval"`
+	BaseBranch                 string   `json:"baseBranch"`
+	RuntimeVerificationEnabled bool     `json:"runtimeVerificationEnabled"`
+	StartupCommand             string   `json:"startupCommand,omitempty"`
+	BuiltinAllowedCommands     []string `json:"builtinAllowedCommands"`
+	BuiltinAllowedPaths        []string `json:"builtinAllowedPaths"`
+	ImplementerProvider        string   `json:"implementerProvider"`
+	ImplementerModel           string   `json:"implementerModel"`
+	VerifierProvider           string   `json:"verifierProvider,omitempty"`
+	VerifierModel              string   `json:"verifierModel,omitempty"`
+	ReviewerProvider           string   `json:"reviewerProvider,omitempty"`
+	ReviewerModel              string   `json:"reviewerModel,omitempty"`
+	Reviewer                   string   `json:"reviewer,omitempty"`
 }
 
 var defaultAllowedCommands = []string{
@@ -55,7 +57,7 @@ func Default() Config {
 	return Config{
 		WorkspaceName: ".workspace", BranchNamePattern: "issue_#<issue番号>",
 		ImplementationDirectory: defaultImplementationDirectory, ImplementationLoopCount: 3,
-		AutoPollingInterval: "5m", BaseBranch: "main",
+		AutoPollingInterval: "5m", BaseBranch: "main", RuntimeVerificationEnabled: true,
 		BuiltinAllowedCommands: DefaultAllowedCommands(),
 		BuiltinAllowedPaths:    DefaultAllowedPaths(),
 		ImplementerProvider:    "codex", ImplementerModel: "gpt-5.6-luna",
@@ -120,6 +122,85 @@ func AddBuiltinAllowedPath(configured Config, pattern string) (Config, bool) {
 	before := len(normalizePathList(configured.BuiltinAllowedPaths))
 	configured.BuiltinAllowedPaths = normalizePathList(append(configured.BuiltinAllowedPaths, pattern))
 	return configured, len(configured.BuiltinAllowedPaths) > before
+}
+
+// SetValue updates one scalar configuration value and validates its value.
+// List-valued settings are intentionally managed by their dedicated commands.
+func SetValue(configured Config, key, value string) (Config, error) {
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	switch key {
+	case "workspaceName":
+		if err := validateWorkspaceName(value); err != nil {
+			return configured, fmt.Errorf("config %s: %w", key, err)
+		}
+		configured.WorkspaceName = value
+	case "branchNamePattern":
+		if value == "" {
+			return configured, fmt.Errorf("config %s: must not be empty", key)
+		}
+		configured.BranchNamePattern = value
+	case "implementationDirectory":
+		if value == "" {
+			return configured, fmt.Errorf("config %s: must not be empty", key)
+		}
+		configured.ImplementationDirectory = value
+	case "implementationLoopCount":
+		count, err := strconv.Atoi(value)
+		if err != nil || count < 1 || count > 10 {
+			return configured, fmt.Errorf("config %s: must be an integer from 1 to 10: %q", key, value)
+		}
+		configured.ImplementationLoopCount = count
+	case "autoPollingInterval":
+		interval, err := time.ParseDuration(value)
+		if err != nil || interval <= 0 {
+			return configured, fmt.Errorf("config %s: must be a positive duration: %q", key, value)
+		}
+		configured.AutoPollingInterval = value
+	case "baseBranch":
+		if value == "" {
+			return configured, fmt.Errorf("config %s: must not be empty", key)
+		}
+		configured.BaseBranch = value
+	case "runtimeVerificationEnabled":
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return configured, fmt.Errorf("config %s: must be true or false: %q", key, value)
+		}
+		configured.RuntimeVerificationEnabled = enabled
+	case "startupCommand":
+		configured.StartupCommand = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(value, "\r\n", "\n"), "\r", "\n"))
+	case "implementerProvider", "verifierProvider", "reviewerProvider":
+		if strings.EqualFold(value, "inherit") {
+			value = ""
+		}
+		provider, err := normalizeProvider(value, "")
+		if err != nil {
+			return configured, fmt.Errorf("config %s: %w", key, err)
+		}
+		switch key {
+		case "implementerProvider":
+			if provider == "" {
+				return configured, fmt.Errorf("config %s: must be codex or copilot", key)
+			}
+			configured.ImplementerProvider = provider
+		case "verifierProvider":
+			configured.VerifierProvider = provider
+		case "reviewerProvider":
+			configured.ReviewerProvider = provider
+		}
+	case "implementerModel":
+		configured.ImplementerModel = value
+	case "verifierModel":
+		configured.VerifierModel = value
+	case "reviewerModel":
+		configured.ReviewerModel = value
+	case "reviewer":
+		configured.Reviewer = value
+	default:
+		return configured, fmt.Errorf("unknown or non-scalar config key %q", key)
+	}
+	return configured, nil
 }
 
 func loadFile(path string) (Config, error) {

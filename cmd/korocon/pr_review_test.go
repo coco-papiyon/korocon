@@ -139,8 +139,11 @@ func TestPRReviewApprovalMovesToVerificationAndCompletesWhenClosed(t *testing.T)
 	reviewResult := completeReviewResult("問題なし", "review result")
 	completePRJob(t, controller, workflow.Prompt(), reviewResult)
 	action, err := controller.HandleInput(context.Background(), "")
-	if err != nil || !action.Handled || action.Restart || workflow.phase != prworkflow.PhaseVerification || workflow.approved != reviewResult || started != 1 {
+	if err != nil || !action.Handled || action.Restart || action.Prompt == "" || workflow.phase != prworkflow.PhaseVerification || workflow.approved != reviewResult || started != 1 {
 		t.Fatalf("action=%+v workflow=%+v err=%v", action, workflow, err)
+	}
+	if !strings.Contains(action.Prompt, "PR head worktree") || !strings.Contains(action.Prompt, "go run ./cmd/app") {
+		t.Fatalf("verification prompt = %q", action.Prompt)
 	}
 	workflow.completed, workflow.state = false, "OPEN"
 	action, err = controller.HandleInput(context.Background(), "")
@@ -301,7 +304,7 @@ func TestReviewRequiresChanges(t *testing.T) {
 	}
 }
 
-func TestPRReviewApprovalWithoutStartupCommandReturnsToSelection(t *testing.T) {
+func TestPRReviewApprovalWithVerificationDisabledReturnsToSelection(t *testing.T) {
 	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview, url: "https://github.com/owner/repository/pull/4"}
 	var out bytes.Buffer
 	controller := newPRReviewController(workflow, &out, nil, nil, nil, nil, nil)
@@ -311,17 +314,35 @@ func TestPRReviewApprovalWithoutStartupCommandReturnsToSelection(t *testing.T) {
 	if err != nil || !action.Handled || !action.Restart || workflow.approved != reviewResult {
 		t.Fatalf("action=%+v workflow=%+v err=%v", action, workflow, err)
 	}
-	if !strings.Contains(out.String(), "動作確認コマンドが設定されていないため、PR処理を終了します") {
+	if !strings.Contains(out.String(), "動作確認が無効のため、PR処理を終了します") {
 		t.Fatalf("output = %q", out.String())
 	}
-	for _, want := range []string{"動作確認後にPRをマージしてください。", "PR URL: https://github.com/owner/repository/pull/4"} {
+	for _, want := range []string{"PR URL: https://github.com/owner/repository/pull/4"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output = %q, missing %q", out.String(), want)
 		}
 	}
 }
 
-func TestPRReviewApprovalWithoutStartupCommandAllowsEmptyURL(t *testing.T) {
+func TestPRReviewApprovalStartsAIVerificationWithoutStartupCommand(t *testing.T) {
+	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
+	var out bytes.Buffer
+	started := 0
+	controller := newPRReviewController(workflow, &out, nil, nil, nil, func(context.Context) (string, error) {
+		started++
+		return "", nil
+	}, nil)
+	completePRJob(t, controller, workflow.Prompt(), completeReviewResult("問題なし", "review result"))
+	action, err := controller.HandleInput(context.Background(), "approve")
+	if err != nil || !action.Handled || action.Restart || action.Prompt == "" || started != 1 || workflow.phase != prworkflow.PhaseVerification {
+		t.Fatalf("action=%+v phase=%q started=%d err=%v", action, workflow.phase, started, err)
+	}
+	if !strings.Contains(out.String(), "AIにworktreeでの動作確認を指示します") || strings.Contains(out.String(), "動作確認コマンドを起動しました") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestPRReviewApprovalWithVerificationDisabledAllowsEmptyURL(t *testing.T) {
 	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
 	var out bytes.Buffer
 	controller := newPRReviewController(workflow, &out, nil, nil, nil, nil, nil)

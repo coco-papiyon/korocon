@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/coco-papiyon/korocon/internal/workflowstate"
 )
 
 type Phase string
@@ -124,9 +127,25 @@ func List(ctx context.Context, workingDir string) ([]Issue, error) {
 }
 
 func ListWithSearch(ctx context.Context, workingDir, search string) ([]Issue, error) {
-	args := []string{"issue", "list", "--state", "open", "--limit", "100", "--json", "number,title,body,labels,comments,url,author,assignees"}
-	if strings.TrimSpace(search) != "" {
-		args = append(args, "--search", strings.TrimSpace(search))
+	return ListWithOptions(ctx, workingDir, IssueListOptions{State: "open", Search: search})
+}
+
+type IssueListOptions struct {
+	State  string
+	Search string
+}
+
+func ListWithOptions(ctx context.Context, workingDir string, options IssueListOptions) ([]Issue, error) {
+	state := strings.ToLower(strings.TrimSpace(options.State))
+	if state == "" {
+		state = "open"
+	}
+	if state != "open" && state != "closed" && state != "all" {
+		return nil, fmt.Errorf("invalid issue state %q", options.State)
+	}
+	args := []string{"issue", "list", "--state", state, "--limit", "100", "--json", "number,title,body,state,labels,comments,url,author,assignees"}
+	if strings.TrimSpace(options.Search) != "" {
+		args = append(args, "--search", strings.TrimSpace(options.Search))
 	}
 	raw, err := ghCommandRunner{}.Run(ctx, workingDir, args...)
 	if err != nil {
@@ -154,7 +173,7 @@ func load(ctx context.Context, workingDir string, number int, workspaceName stri
 	if state := strings.TrimSpace(selected.State); state != "" && !strings.EqualFold(state, "open") {
 		return nil, fmt.Errorf("Issue #%dはopenではありません (state: %s)", number, state)
 	}
-	phase, err := classify(selected.Labels)
+	phase, err := loadPhase(selected, workingDir)
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +316,7 @@ func (w *Workflow) Start(ctx context.Context) error {
 	if w.Phase == PhaseImplementation || w.Phase == PhaseImplementationReady {
 		label = labelImplementationRunning
 	}
-	return w.setStateLabel(ctx, label)
+	return w.setState(ctx, label)
 }
 
 func (w *Workflow) Finish(ctx context.Context, runErr error) error {
@@ -310,7 +329,7 @@ func (w *Workflow) Finish(ctx context.Context, runErr error) error {
 	} else if w.Phase == PhaseImplementation {
 		label = labelImplementationFailed
 	}
-	return w.setStateLabel(ctx, label)
+	return w.setState(ctx, label)
 }
 
 // SaveResult persists the reviewable artifact using korobokcle's workspace
@@ -346,7 +365,7 @@ func (w *Workflow) Approve(ctx context.Context, _ string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if err := w.setStateLabel(ctx, labelPRCreated); err != nil {
+		if err := w.setState(ctx, labelPRCreated); err != nil {
 			return "", fmt.Errorf("mark pull request created: %w", err)
 		}
 		return url, nil
@@ -357,7 +376,7 @@ func (w *Workflow) Approve(ctx context.Context, _ string) (string, error) {
 			return "", fmt.Errorf("post design result: %w", err)
 		}
 	}
-	return "", w.setStateLabel(ctx, labelDesignApproved)
+	return "", w.setState(ctx, labelDesignApproved)
 }
 
 func (w *Workflow) readArtifact() (string, error) {
@@ -419,32 +438,63 @@ func sanitizePart(value string) string {
 	return strings.Trim(value, "-")
 }
 
-func (w *Workflow) setStateLabel(ctx context.Context, target string) error {
-	if _, err := w.runner.Run(ctx, w.dir, "label", "create", target, "--color", "0E8A16", "--description", "korobokcle state label", "--force"); err != nil {
-		return fmt.Errorf("ensure label %s: %w", target, err)
-	}
-	raw, err := w.runner.Run(ctx, w.dir, "issue", "view", strconv.Itoa(w.Issue.Number), "--json", "labels")
+func loadPhase(issue Issue, workingDir string) (Phase, error) {
+	key := issueStateKey(issue, workingDir)
+	state, found, err := workflowstate.Get(key)
 	if err != nil {
-		return err
+		return "", err
 	}
-	var current struct {
-		Labels []Label `json:"labels"`
+	if found {
+		return classify([]Label{{Name: state}})
 	}
-	if err := json.Unmarshal(raw, &current); err != nil {
-		return fmt.Errorf("decode issue labels: %w", err)
+	phase, err := classify(issue.Labels)
+	if err != nil {
+		return "", err
 	}
-	args := []string{"issue", "edit", strconv.Itoa(w.Issue.Number), "--add-label", target}
-	for _, label := range current.Labels {
-		name := strings.TrimSpace(label.Name)
-		if strings.EqualFold(name, target) {
-			continue
+	if err := workflowstate.Set(key, issueStateForPhase(phase)); err != nil {
+		return "", err
+	}
+	return phase, nil
+}
+
+func issueStateForPhase(phase Phase) string {
+	switch phase {
+	case PhaseDesignReady:
+		return labelDesignReady
+	case PhaseImplementation:
+		return labelImplementationRunning
+	case PhaseImplementationReady:
+		return labelImplementationReady
+	case PhaseDesignFailed:
+		return labelDesignFailed
+	case PhaseImplementationFailed:
+		return labelImplementationFailed
+	case PhaseFailed:
+		return "state:failed"
+	default:
+		return labelDesignRunning
+	}
+}
+
+func (w *Workflow) setState(_ context.Context, target string) error {
+	return workflowstate.Set(issueStateKey(w.Issue, w.dir), target)
+}
+
+func issueStateKey(issue Issue, workingDir string) workflowstate.Key {
+	return workflowstate.Key{Repository: repositoryID(issue.URL, workingDir), Kind: "issue", Number: issue.Number}
+}
+
+func repositoryID(resourceURL, workingDir string) string {
+	parsed, err := url.Parse(strings.TrimSpace(resourceURL))
+	if err == nil && strings.EqualFold(parsed.Host, "github.com") {
+		parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+		if len(parts) >= 2 && parts[0] != "" && parts[1] != "" {
+			return "github.com/" + parts[0] + "/" + parts[1]
 		}
-		if _, ok := stateLabels[strings.ToLower(name)]; ok {
-			args = append(args, "--remove-label", name)
-		}
 	}
-	if _, err := w.runner.Run(ctx, w.dir, args...); err != nil {
-		return fmt.Errorf("update issue state label: %w", err)
+	abs, err := filepath.Abs(workingDir)
+	if err == nil {
+		return "file://" + filepath.ToSlash(abs)
 	}
-	return nil
+	return "file://" + filepath.ToSlash(workingDir)
 }

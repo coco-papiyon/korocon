@@ -65,6 +65,7 @@ func TestPrintConfigList(t *testing.T) {
 		"config: /tmp/korocon/config.json",
 		"implementerProvider: copilot",
 		"implementerModel: auto",
+		"runtimeVerificationEnabled: true",
 		"  - go test ./...",
 		"  - git status",
 		"builtinAllowedPaths:",

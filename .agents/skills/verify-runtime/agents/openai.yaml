@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verify Runtime"
+  short_description: "Verify build and core CLI commands"
+  default_prompt: "Use $verify-runtime to run the korocon build and core CLI smoke tests."

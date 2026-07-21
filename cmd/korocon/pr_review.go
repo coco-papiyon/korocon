@@ -321,17 +321,23 @@ func (c *prReviewController) HandleInput(ctx context.Context, input string) (dae
 			}
 			c.mu.Lock()
 			c.pending, c.result = false, ""
-			c.workflow.SetPhase(prworkflow.PhaseVerification)
 			c.mu.Unlock()
 			if c.startVerification == nil {
-				_, err := fmt.Fprintf(c.out, "レビューを承認しました。動作確認コマンドが設定されていないため、PR処理を終了します。\n動作確認後にPRをマージしてください。\nPR URL: %s\n", c.workflow.URL())
+				_, err := fmt.Fprintf(c.out, "レビューを承認しました。動作確認が無効のため、PR処理を終了します。\nPR URL: %s\n", c.workflow.URL())
 				if c.closeFix != nil {
 					err = errors.Join(err, c.closeFix())
 				}
 				return daemon.InputAction{Handled: true, Restart: true}, err
 			}
-			_, err := fmt.Fprintf(c.out, "レビューを承認しました。動作確認コマンドを起動しました: %s\n動作確認後にPRをクローズし、未入力状態でEnterまたは/checkを入力してください。\n", verification)
-			return daemon.InputAction{Handled: true}, err
+			c.mu.Lock()
+			c.workflow.SetPhase(prworkflow.PhaseVerification)
+			c.mu.Unlock()
+			message := "レビューを承認しました。AIにworktreeでの動作確認を指示します。"
+			if verification != "" {
+				message += "\n動作確認コマンドを起動しました: " + verification
+			}
+			_, err := fmt.Fprintf(c.out, "%s\n動作確認後にPRをクローズし、未入力状態でEnterまたは/checkを入力してください。\n", message)
+			return daemon.InputAction{Handled: true, Prompt: runtimeVerificationPrompt(verification)}, err
 		}
 		instruction := trimmed
 		if command == "/fix" {
@@ -366,6 +372,18 @@ func (c *prReviewController) HandleInput(ctx context.Context, input string) (dae
 		return daemon.InputAction{Handled: true, Restart: true}, err
 	}
 	return c.enqueue(c.workflow.FixPrompt(input), true, "追加指示をAIへ送信し、レビュー指摘修正を再実行します。")
+}
+
+func runtimeVerificationPrompt(command string) string {
+	lines := []string{
+		"PRレビューが承認されました。現在のPR head worktreeで動作確認を行ってください。",
+		"リポジトリで利用可能な動作確認用スキルがあれば、その手順に従ってください。",
+		"ソースや設定を変更せず、実行したコマンド、結果、指摘事項、残課題を日本語でまとめてください。",
+	}
+	if command = strings.TrimSpace(command); command != "" {
+		lines = append(lines, "動作確認コマンドは別プロセスで起動済みです: "+command)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (c *prReviewController) handleFailureInput(ctx context.Context, input, prompt string, phase prworkflow.Phase, reset func(context.Context) error) (daemon.InputAction, error) {

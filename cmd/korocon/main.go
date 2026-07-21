@@ -34,9 +34,11 @@ const defaultModel = "gpt-5.6-luna"
 
 var listPullRequests = prworkflow.List
 var listPullRequestsWithSearch = prworkflow.ListWithSearch
+var listPullRequestsWithOptions = prworkflow.ListWithOptions
 var loadPullRequest = prworkflow.Load
 var listIssues = issueworkflow.List
 var listIssuesWithSearch = issueworkflow.ListWithSearch
+var listIssuesWithOptions = issueworkflow.ListWithOptions
 var loadIssue = issueworkflow.Load
 var currentGitHubUser = lookupCurrentGitHubUser
 var loadProjectMembership = fetchProjectMembership
@@ -107,6 +109,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return doctor(args[1:], stdout)
 	case "config":
 		return runConfig(args[1:], os.Stdin, stdout, stderr)
+	case "list":
+		return runList(args[1:], stdout, stderr)
 	case "run":
 		return runPrompt(args[1:], stdout, stderr)
 	default:
@@ -405,11 +409,14 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 				}
 				var startVerification func(context.Context) (string, error)
 				var closeVerification func() error
-				if configured.StartupCommand != "" {
+				if configured.RuntimeVerificationEnabled {
 					startVerification = func(ctx context.Context) (string, error) {
 						worktree, err := fixEngine.PrepareWorktree(ctx)
 						if err != nil {
 							return "", fmt.Errorf("prepare PR worktree: %w", err)
+						}
+						if strings.TrimSpace(configured.StartupCommand) == "" {
+							return "", nil
 						}
 						runtimeCommand = prworkflow.NewRuntimeCommand(configured.StartupCommand, worktree, logFile)
 						return runtimeCommand.Start(ctx)
@@ -1557,8 +1564,11 @@ Usage:
   korocon config init [--force]
   korocon config list
   korocon config model
+  korocon config set <KEY> <VALUE>
   korocon config allow [COMMAND]
   korocon config allow-path [GLOB]
+  korocon list issue [options]
+  korocon list pr [options]
   korocon doctor [--binary codex]
   korocon version
 
