@@ -246,7 +246,7 @@ func TestPRReviewFindingsCanBeApproved(t *testing.T) {
 	}
 }
 
-func TestPRReviewRejectsIncompleteFinalResponse(t *testing.T) {
+func TestPRReviewAcceptsIncompleteFinalResponse(t *testing.T) {
 	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
 	var out bytes.Buffer
 	controller := newPRReviewController(workflow, &out, nil, nil, nil, nil, nil)
@@ -255,14 +255,14 @@ func TestPRReviewRejectsIncompleteFinalResponse(t *testing.T) {
 	}
 	result := "PRの要件と実差分を照合してレビューします。"
 	err := controller.OnJobFinish(context.Background(), 1, workflow.Prompt(), result, nil)
-	if err == nil || !strings.Contains(err.Error(), "レビュー最終回答が不完全") {
-		t.Fatalf("error = %v", err)
+	if err != nil {
+		t.Fatalf("error = %v, want nil", err)
 	}
-	if !controller.failed || controller.pending {
-		t.Fatalf("failed = %v, pending = %v", controller.failed, controller.pending)
+	if controller.failed || !controller.pending || controller.result != result {
+		t.Fatalf("failed = %v, pending = %v, result = %q", controller.failed, controller.pending, controller.result)
 	}
-	if !strings.Contains(out.String(), "続きから再実行") {
-		t.Fatalf("retry options were not displayed: %q", out.String())
+	if strings.Contains(out.String(), "続きから再実行") {
+		t.Fatalf("unexpected retry options: %q", out.String())
 	}
 }
 

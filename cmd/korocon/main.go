@@ -320,6 +320,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 		}
 		err = func() error {
 			activeAI := implementer
+			workingDir := *dir
 			if selectedPR != nil {
 				activeAI = pullRequestAI(selectedPR.Phase, implementer, reviewer)
 			}
@@ -386,6 +387,12 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 				selectedPR.SetFixPublisher(fixEngine.Publish)
 				selectedPR.SetConflictPublisher(fixEngine.PublishConflict)
 				defer fixEngine.Close()
+				if pullRequestUsesReviewerWorktree(selectedPR.Phase) {
+					workingDir, err = fixEngine.PrepareWorktree(ctx)
+					if err != nil {
+						return fmt.Errorf("prepare PR review worktree: %w", err)
+					}
+				}
 				fixJob := func(prompt string) *daemon.JobSpec {
 					return &daemon.JobSpec{Prompt: prompt, Execute: func(ctx context.Context, model string, handler runner.ServerRequestHandler, setPhase func(string), onEvent func()) (runner.TurnResult, error) {
 						return fixEngine.Run(ctx, prompt, model, handler, setPhase, onEvent)
@@ -400,7 +407,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 				var closeVerification func() error
 				if configured.StartupCommand != "" {
 					startVerification = func(ctx context.Context) (string, error) {
-						worktree, err := fixEngine.Worktree(ctx)
+						worktree, err := fixEngine.PrepareWorktree(ctx)
 						if err != nil {
 							return "", fmt.Errorf("prepare PR worktree: %w", err)
 						}
@@ -425,7 +432,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 			}
 			cfg := daemon.Config{
 				Provider: activeAI.Provider, Binary: activeAI.Binary, Model: activeAI.Model,
-				WorkingDir: *dir, AllowAllTools: *allowAllTools, StreamLogs: *streamLogs,
+				WorkingDir: workingDir, AllowAllTools: *allowAllTools, StreamLogs: *streamLogs,
 				LogOut: logFile, LogErr: logFile, StatusOut: displayOut, ResultOut: displayOut,
 				InitialPrompt:   initialPrompt,
 				InitialJob:      initialJob,
@@ -441,7 +448,14 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 				return nil
 			}
 			cfg.BeforeJob = func(ctx context.Context, _ uint64, _ string) error {
-				return issueworkflow.SyncRepository(ctx, *dir)
+				if err := issueworkflow.SyncRepository(ctx, *dir); err != nil {
+					return err
+				}
+				if selectedPR != nil && pullRequestUsesReviewerWorktree(selectedPR.Phase) {
+					_, err := fixEngine.PrepareWorktree(ctx)
+					return err
+				}
+				return nil
 			}
 			if review != nil {
 				cfg.OnJobStart = review.OnJobStart
@@ -1323,6 +1337,15 @@ func pullRequestAI(phase prworkflow.Phase, implementer, reviewer aiSelection) ai
 		return reviewer
 	}
 	return implementer
+}
+
+func pullRequestUsesReviewerWorktree(phase prworkflow.Phase) bool {
+	switch phase {
+	case prworkflow.PhaseReview, prworkflow.PhaseReviewApproved, prworkflow.PhaseVerification, prworkflow.PhaseReviewFailed:
+		return true
+	default:
+		return false
+	}
 }
 
 var pullRequestStateNames = map[string]string{

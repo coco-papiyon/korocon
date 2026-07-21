@@ -62,6 +62,76 @@ func TestConflictEnginePreparesMergeAndPublishesResolution(t *testing.T) {
 	}
 }
 
+func TestPrepareWorktreeUpdatesExistingWorktreeToLatestPRHead(t *testing.T) {
+	root := t.TempDir()
+	remote := filepath.Join(root, "remote.git")
+	repository := filepath.Join(root, "repository")
+	runGitCommand(t, root, "init", "--bare", remote)
+	runGitCommand(t, root, "clone", remote, repository)
+	runGitCommand(t, repository, "config", "user.email", "test@example.com")
+	runGitCommand(t, repository, "config", "user.name", "Test User")
+	runGitCommand(t, repository, "checkout", "-b", "main")
+	writeTestFile(t, filepath.Join(repository, "result.txt"), "initial\n")
+	runGitCommand(t, repository, "add", "result.txt")
+	runGitCommand(t, repository, "commit", "-m", "initial")
+	runGitCommand(t, repository, "push", "-u", "origin", "main")
+	runGitCommand(t, repository, "checkout", "-b", "feature/13")
+	runGitCommand(t, repository, "push", "-u", "origin", "feature/13")
+
+	engine := NewFixEngine(FixConfig{
+		RepositoryDir: repository, ImplementationDirectory: filepath.Join(root, "worktrees"),
+		Number: 13, HeadRefName: "feature/13", BaseRefName: "main",
+	})
+	worktree, err := engine.PrepareWorktree(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeTestFile(t, filepath.Join(repository, "result.txt"), "latest\n")
+	runGitCommand(t, repository, "commit", "-am", "latest")
+	runGitCommand(t, repository, "push", "origin", "feature/13")
+	if _, err := engine.PrepareWorktree(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(worktree, "result.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "latest\n" {
+		t.Fatalf("worktree content = %q, want latest", content)
+	}
+}
+
+func TestPrepareWorktreeRejectsUncommittedChanges(t *testing.T) {
+	root := t.TempDir()
+	remote := filepath.Join(root, "remote.git")
+	repository := filepath.Join(root, "repository")
+	runGitCommand(t, root, "init", "--bare", remote)
+	runGitCommand(t, root, "clone", remote, repository)
+	runGitCommand(t, repository, "config", "user.email", "test@example.com")
+	runGitCommand(t, repository, "config", "user.name", "Test User")
+	runGitCommand(t, repository, "checkout", "-b", "main")
+	writeTestFile(t, filepath.Join(repository, "result.txt"), "initial\n")
+	runGitCommand(t, repository, "add", "result.txt")
+	runGitCommand(t, repository, "commit", "-m", "initial")
+	runGitCommand(t, repository, "push", "-u", "origin", "main")
+	runGitCommand(t, repository, "checkout", "-b", "feature/14")
+	runGitCommand(t, repository, "push", "-u", "origin", "feature/14")
+
+	engine := NewFixEngine(FixConfig{
+		RepositoryDir: repository, ImplementationDirectory: filepath.Join(root, "worktrees"),
+		Number: 14, HeadRefName: "feature/14", BaseRefName: "main",
+	})
+	worktree, err := engine.PrepareWorktree(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(worktree, "result.txt"), "local change\n")
+	if _, err := engine.PrepareWorktree(context.Background()); err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("PrepareWorktree error = %v", err)
+	}
+}
+
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {

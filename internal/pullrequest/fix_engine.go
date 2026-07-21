@@ -279,6 +279,27 @@ func (e *FixEngine) Worktree(ctx context.Context) (string, error) {
 	return worktree, nil
 }
 
+// PrepareWorktree creates or updates the PR head worktree for read-only review work.
+// Unlike Worktree, it never accepts a dirty worktree because that could make a
+// review or runtime verification use source that differs from the remote PR head.
+func (e *FixEngine) PrepareWorktree(ctx context.Context) (string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	worktree, err := e.ensureWorktree(ctx)
+	if err != nil {
+		return "", err
+	}
+	status, err := gitOutput(ctx, worktree, "status", "--porcelain")
+	if err != nil {
+		return "", fmt.Errorf("inspect PR worktree after update: %w", err)
+	}
+	if strings.TrimSpace(status) != "" {
+		return "", fmt.Errorf("PR worktree has uncommitted changes: %s", worktree)
+	}
+	e.worktree = worktree
+	return worktree, nil
+}
+
 func (e *FixEngine) ensureStarted(ctx context.Context, model string, handler runner.ServerRequestHandler) error {
 	if e.implementer != nil && e.verifier != nil {
 		return nil
@@ -435,6 +456,9 @@ func (e *FixEngine) ensureWorktree(ctx context.Context) (string, error) {
 	repositoryDir, err := filepath.Abs(e.cfg.RepositoryDir)
 	if err != nil {
 		return "", err
+	}
+	if _, err := gitOutput(ctx, repositoryDir, "fetch", "--prune", "origin"); err != nil {
+		return "", fmt.Errorf("fetch PR head: %w", err)
 	}
 	repositoryName := strings.TrimSuffix(filepath.Base(filepath.Clean(repositoryDir)), ".git")
 	root := strings.NewReplacer("<リポジトリ名>", repositoryName, "<repositoryName>", repositoryName).Replace(e.cfg.ImplementationDirectory)

@@ -147,13 +147,6 @@ func (c *prReviewController) OnJobFinish(ctx context.Context, id uint64, prompt 
 	if !tracked {
 		return nil
 	}
-	var validationErr error
-	if runErr == nil && c.workflow.CurrentPhase() == prworkflow.PhaseReview {
-		validationErr = validateReviewResult(result)
-		if validationErr != nil {
-			runErr = validationErr
-		}
-	}
 	artifact := ""
 	if runErr == nil {
 		var err error
@@ -163,7 +156,7 @@ func (c *prReviewController) OnJobFinish(ctx context.Context, id uint64, prompt 
 		}
 	}
 	if err := c.workflow.Finish(ctx, runErr); err != nil {
-		return errors.Join(err, validationErr)
+		return err
 	}
 	if runErr != nil {
 		if c.closeFix != nil {
@@ -176,7 +169,7 @@ func (c *prReviewController) OnJobFinish(ctx context.Context, id uint64, prompt 
 		c.failedPrompt = prompt
 		_, err := fmt.Fprintln(c.out, failureOptions())
 		c.mu.Unlock()
-		return errors.Join(err, validationErr)
+		return err
 	}
 	c.mu.Lock()
 	c.pending, c.result = true, result
@@ -202,20 +195,6 @@ func (c *prReviewController) OnJobFinish(ctx context.Context, id uint64, prompt 
 	}
 	c.mu.Unlock()
 	return err
-}
-
-func validateReviewResult(result string) error {
-	required := []string{"## 結果", "## 概要", "## 要件と実装状況", "## 指摘事項", "## 確認事項"}
-	normalized := strings.ReplaceAll(result, "\r\n", "\n")
-	position := 0
-	for _, heading := range required {
-		index := strings.Index(normalized[position:], heading)
-		if index < 0 {
-			return fmt.Errorf("レビュー最終回答が不完全です: %s がありません", heading)
-		}
-		position += index + len(heading)
-	}
-	return nil
 }
 
 func reviewRequiresChanges(result string) bool {

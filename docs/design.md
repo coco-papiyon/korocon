@@ -191,8 +191,8 @@ Issue実装・検証用Copilotセッションは、確定した実装worktreeを
 2. `mergeable=CONFLICTING`または`mergeStateStatus=DIRTY`はラベル由来の未レビュー・レビュー修正状態より優先してコンフリクトと判定する
 3. コンフリクトPRはhead worktreeへbaseをmergeし、実装者AIと`resolve-pr-conflicts`スキルで解消して`pr_conflict/`へ成果物を保存する
 4. コンフリクト解消の承認時は未解消ファイルを検査し、merge commitをPR headへpushして`state:pr_conflict_resolved`へ更新する
-5. 通常PRはレビューアと`review-pull-request`スキルを使ってレビューし、`review/`へ成果物を保存する
-6. レビュー承認時はレビューアの工程として`startupCommand`があればPR headのworktreeで自動起動して`state:review_approved`の動作確認へ進み、未設定なら「動作確認後にPRをマージしてください。」という案内とPR URLを表示してPR処理を終了し、最初の選択へ戻る。`/rerun`は同じレビューを再実行する
+5. 通常PRはPR head用worktreeを作成または再利用し、`origin`をfetchして最新化する。レビューアLLMはそのworktreeを作業ディレクトリとして起動し、`review-pull-request`スキルを使ってレビューして`review/`へ成果物を保存する。未コミット変更があるworktreeはレビューに使用しない
+6. レビュー承認時はレビューアの工程として`startupCommand`があればPR head用worktreeを再度最新化し、そのディレクトリで自動起動して`state:review_approved`の動作確認へ進む。未設定なら「動作確認後にPRをマージしてください。」という案内とPR URLを表示してPR処理を終了し、最初の選択へ戻る。`/rerun`は同じworktreeを最新化してレビューを再実行する
 7. レビュー結果が`要修正`または`コメントあり`でも承認待ちにし、承認入力ならレビューOKとして次工程へ進める。指摘内容の入力なら結果と指示をPRへコメントして`state:pr_review_comment`へ更新し、レビューアを停止して最初の選択へ戻す。`/rerun`はレビューを再実行する
 8. `state:review_approved`のPRを選択した場合はレビュー指摘承認済みと表示して入力を待つ。未入力Enterなら最初の選択へ戻り、文字入力ならその内容を補足としてレビューアで再レビューする
 9. `state:pr_review_comment`などレビュー修正状態のPRを選択すると、一般コメント、レビュー本文、行単位レビューコメントをすべて取得して`review_fix/<PR番号>_<正規化タイトル>_レビュー指摘.md`へ保存・表示し、利用者の修正方針を待つ。未入力Enterは保存済み内容をそのまま修正対象とし、文字入力は追加の修正方針として扱う

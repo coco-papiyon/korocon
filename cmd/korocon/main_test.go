@@ -582,6 +582,29 @@ func TestPullRequestAIUsesSeparateRoleByPhase(t *testing.T) {
 	}
 }
 
+func TestPullRequestUsesReviewerWorktree(t *testing.T) {
+	for _, phase := range []prworkflow.Phase{
+		prworkflow.PhaseReview,
+		prworkflow.PhaseReviewApproved,
+		prworkflow.PhaseVerification,
+		prworkflow.PhaseReviewFailed,
+	} {
+		if !pullRequestUsesReviewerWorktree(phase) {
+			t.Fatalf("phase %q should use reviewer worktree", phase)
+		}
+	}
+	for _, phase := range []prworkflow.Phase{
+		prworkflow.PhaseFix,
+		prworkflow.PhaseConflict,
+		prworkflow.PhaseFixFailed,
+		prworkflow.PhaseConflictFailed,
+	} {
+		if pullRequestUsesReviewerWorktree(phase) {
+			t.Fatalf("phase %q should use fix engine worktree handling", phase)
+		}
+	}
+}
+
 func TestRunInteractiveDisplaysRoleAISelectionsFromFlags(t *testing.T) {
 	original := loadIssue
 	originalUser := currentGitHubUser
