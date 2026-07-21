@@ -816,7 +816,7 @@ func selectAutoGitHubInformation(ctx context.Context, out io.Writer, workingDir,
 			return nil, nil, fmt.Errorf("Issue一覧の取得に失敗しました: %w", err)
 		}
 		issues = slices.DeleteFunc(issues, func(issue issueworkflow.Issue) bool {
-			return issueIsRunning(issue) || !issueIsImplementerTarget(issue) || !assignedTo(issue.Assignees, assigneeFilter) || !matchesIssueFilters(issue, filters)
+			return issueIsRunningInDir(issue, workingDir) || !issueIsImplementerTargetInDir(issue, workingDir) || !assignedTo(issue.Assignees, assigneeFilter) || !matchesIssueFilters(issue, filters)
 		})
 		if len(issues) > 0 {
 			sort.Slice(issues, func(i, j int) bool { return issues[i].Number > issues[j].Number })
@@ -833,7 +833,7 @@ func selectAutoGitHubInformation(ctx context.Context, out io.Writer, workingDir,
 		return nil, nil, fmt.Errorf("PR一覧の取得に失敗しました: %w", err)
 	}
 	prs = slices.DeleteFunc(prs, func(pr prworkflow.PullRequest) bool {
-		return pullRequestIsRunning(pr) || strings.EqualFold(strings.TrimSpace(pr.State), "MERGED") || pr.IsDraft || !pullRequestIsRoleTarget(pr, mode) || !assignedToPR(pr.Assignees, assigneeFilter) || !matchesPullRequestFilters(pr, filters)
+		return pullRequestIsRunningInDir(pr, workingDir) || strings.EqualFold(strings.TrimSpace(pr.State), "MERGED") || pr.IsDraft || !pullRequestIsRoleTargetInDir(pr, mode, workingDir) || !assignedToPR(pr.Assignees, assigneeFilter) || !matchesPullRequestFilters(pr, filters)
 	})
 	if len(prs) == 0 {
 		return nil, nil, errNoAutoTargets
@@ -927,7 +927,7 @@ func selectIssueForRole(ctx context.Context, reader *bufio.Reader, out io.Writer
 		return nil, fmt.Errorf("Issue一覧の取得に失敗しました: %w", err)
 	}
 	issues = slices.DeleteFunc(issues, func(issue issueworkflow.Issue) bool {
-		return !issueIsImplementerTarget(issue) || !assignedTo(issue.Assignees, assigneeFilter) || !matchesIssueFilters(issue, filters)
+		return !issueIsImplementerTargetInDir(issue, workingDir) || !assignedTo(issue.Assignees, assigneeFilter) || !matchesIssueFilters(issue, filters)
 	})
 	if len(issues) == 0 {
 		return nil, errors.New("実装者が担当するIssueがありません")
@@ -984,6 +984,19 @@ func issueIsImplementerTarget(issue issueworkflow.Issue) bool {
 	return true
 }
 
+func issueIsImplementerTargetInDir(issue issueworkflow.Issue, workingDir string) bool {
+	state, err := issueworkflow.StateForIssue(issue, workingDir)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "state:design_ready", "state:implementation_ready", "state:implementation_approved", "state:pr_created":
+		return false
+	default:
+		return true
+	}
+}
+
 func issueIsRunning(issue issueworkflow.Issue) bool {
 	for _, label := range issue.Labels {
 		switch strings.ToLower(strings.TrimSpace(label.Name)) {
@@ -992,6 +1005,19 @@ func issueIsRunning(issue issueworkflow.Issue) bool {
 		}
 	}
 	return false
+}
+
+func issueIsRunningInDir(issue issueworkflow.Issue, workingDir string) bool {
+	state, err := issueworkflow.StateForIssue(issue, workingDir)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "state:design_running", "state:implementation_running":
+		return true
+	default:
+		return false
+	}
 }
 
 func issueStatus(issue issueworkflow.Issue) string {
@@ -1223,7 +1249,7 @@ func selectPullRequestForRole(ctx context.Context, reader *bufio.Reader, out io.
 		if strings.EqualFold(strings.TrimSpace(pr.State), "MERGED") || pr.IsDraft {
 			return true
 		}
-		return !pullRequestIsRoleTarget(pr, mode) || !assignedToPR(pr.Assignees, assigneeFilter) || !matchesPullRequestFilters(pr, filters)
+		return !pullRequestIsRoleTargetInDir(pr, mode, workingDir) || !assignedToPR(pr.Assignees, assigneeFilter) || !matchesPullRequestFilters(pr, filters)
 	})
 	if len(prs) == 0 {
 		if mode == selectionModeReviewer {
@@ -1301,6 +1327,29 @@ func pullRequestIsRoleTarget(pr prworkflow.PullRequest, mode selectionMode) bool
 	}
 }
 
+func pullRequestIsRoleTargetInDir(pr prworkflow.PullRequest, mode selectionMode, workingDir string) bool {
+	if prworkflow.HasConflict(pr) {
+		return mode == selectionModeImplementer || mode == selectionModeDefault
+	}
+	state, err := prworkflow.StateForPullRequest(pr, workingDir)
+	if err != nil {
+		return false
+	}
+	switch mode {
+	case selectionModeImplementer:
+		switch strings.ToLower(strings.TrimSpace(state)) {
+		case "state:pr_review_comment", "state:review_fix_design_running", "state:review_fix_design_ready", "state:review_fix_design_approved", "state:review_fix_implementation_running", "state:review_fix_implementation_ready", "state:review_fix_implementation_approved", "state:review_failed", "state:review_fix_failed", "state:pr_conflict_failed", "state:failed":
+			return true
+		default:
+			return false
+		}
+	case selectionModeReviewer:
+		return (strings.TrimSpace(state) == "" || strings.EqualFold(strings.TrimSpace(state), "state:review_fixed")) && !prworkflow.HasConflict(pr)
+	default:
+		return true
+	}
+}
+
 func pullRequestIsRunning(pr prworkflow.PullRequest) bool {
 	for _, label := range pr.Labels {
 		switch strings.ToLower(strings.TrimSpace(label.Name)) {
@@ -1309,6 +1358,19 @@ func pullRequestIsRunning(pr prworkflow.PullRequest) bool {
 		}
 	}
 	return false
+}
+
+func pullRequestIsRunningInDir(pr prworkflow.PullRequest, workingDir string) bool {
+	state, err := prworkflow.StateForPullRequest(pr, workingDir)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "state:review_running", "state:review_fix_design_running", "state:review_fix_implementation_running", "state:pr_conflict_running":
+		return true
+	default:
+		return false
+	}
 }
 
 func pullRequestHasStateLabel(pr prworkflow.PullRequest) bool {

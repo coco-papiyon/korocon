@@ -78,6 +78,7 @@ func TestRemainingInputReturnsOriginalWithoutReadAhead(t *testing.T) {
 func TestSelectPullRequestDisplaysStatusAndLoadsSelectedNumber(t *testing.T) {
 	originalList, originalLoad := listPullRequests, loadPullRequest
 	t.Cleanup(func() { listPullRequests, loadPullRequest = originalList, originalLoad })
+	workingDir := t.TempDir()
 	listPullRequests = func(context.Context, string) ([]prworkflow.PullRequest, error) {
 		return []prworkflow.PullRequest{
 			{Number: 3, Title: "Merged", State: "MERGED", ReviewDecision: "APPROVED", HeadRefName: "feature/3", BaseRefName: "main"},
@@ -92,7 +93,7 @@ func TestSelectPullRequestDisplaysStatusAndLoadsSelectedNumber(t *testing.T) {
 		return &prworkflow.Workflow{PR: prworkflow.PullRequest{Number: number, Title: "Conflict", State: "OPEN", Mergeable: "CONFLICTING", HeadRefName: "feature/6", BaseRefName: "main"}, Phase: prworkflow.PhaseConflict}, nil
 	}
 	var out strings.Builder
-	selected, err := selectPullRequest(context.Background(), bufio.NewReader(strings.NewReader("6\n")), &out, ".", ".workspace")
+	selected, err := selectPullRequest(context.Background(), bufio.NewReader(strings.NewReader("6\n")), &out, workingDir, ".workspace")
 	if err != nil {
 		t.Fatal(err)
 	}

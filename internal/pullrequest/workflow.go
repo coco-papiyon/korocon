@@ -628,19 +628,30 @@ func (w *Workflow) comment(ctx context.Context, body string) error {
 }
 
 func loadPhase(pr PullRequest, workingDir string) (Phase, error) {
+	state, err := StateForPullRequest(pr, workingDir)
+	if err != nil {
+		return "", err
+	}
+	return pullRequestPhase(PullRequest{Labels: []Label{{Name: state}}, Mergeable: pr.Mergeable, MergeStateStatus: pr.MergeStateStatus}), nil
+}
+
+// StateForPullRequest returns the persisted workflow state, migrating legacy
+// GitHub labels once when no database state exists.
+func StateForPullRequest(pr PullRequest, workingDir string) (string, error) {
 	key := pullRequestStateKey(pr, workingDir)
 	state, found, err := workflowstate.Get(key)
 	if err != nil {
 		return "", err
 	}
 	if found {
-		return pullRequestPhase(PullRequest{Labels: []Label{{Name: state}}, Mergeable: pr.Mergeable, MergeStateStatus: pr.MergeStateStatus}), nil
+		return state, nil
 	}
 	phase := pullRequestPhase(pr)
-	if err := workflowstate.Set(key, pullRequestStateForPhase(phase)); err != nil {
+	state = pullRequestStateForPhase(phase)
+	if err := workflowstate.Set(key, state); err != nil {
 		return "", err
 	}
-	return phase, nil
+	return state, nil
 }
 
 func pullRequestStateForPhase(phase Phase) string {
@@ -658,7 +669,7 @@ func pullRequestStateForPhase(phase Phase) string {
 	case PhaseConflictFailed:
 		return "state:pr_conflict_failed"
 	default:
-		return "state:review_running"
+		return ""
 	}
 }
 

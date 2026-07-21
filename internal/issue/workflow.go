@@ -439,22 +439,33 @@ func sanitizePart(value string) string {
 }
 
 func loadPhase(issue Issue, workingDir string) (Phase, error) {
+	state, err := StateForIssue(issue, workingDir)
+	if err != nil {
+		return "", err
+	}
+	return classify([]Label{{Name: state}})
+}
+
+// StateForIssue returns the persisted workflow state, migrating the legacy
+// GitHub label once when no database state exists.
+func StateForIssue(issue Issue, workingDir string) (string, error) {
 	key := issueStateKey(issue, workingDir)
 	state, found, err := workflowstate.Get(key)
 	if err != nil {
 		return "", err
 	}
 	if found {
-		return classify([]Label{{Name: state}})
+		return state, nil
 	}
 	phase, err := classify(issue.Labels)
 	if err != nil {
 		return "", err
 	}
-	if err := workflowstate.Set(key, issueStateForPhase(phase)); err != nil {
+	state = issueStateForPhase(phase)
+	if err := workflowstate.Set(key, state); err != nil {
 		return "", err
 	}
-	return phase, nil
+	return state, nil
 }
 
 func issueStateForPhase(phase Phase) string {
@@ -472,7 +483,7 @@ func issueStateForPhase(phase Phase) string {
 	case PhaseFailed:
 		return "state:failed"
 	default:
-		return labelDesignRunning
+		return "state:detected"
 	}
 }
 
