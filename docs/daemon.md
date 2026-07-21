@@ -120,7 +120,7 @@ printf '%s\n' 'テストの不足箇所を調べて' > /tmp/korocon-prompts
 
 - `builtinAllowedCommands`に一致する安全なコマンド実行要求は自動承認します。省略または空配列の場合はkorobokcleと同じ既定リストです。
 - `builtinAllowedPaths`に一致するCopilotのパス要求と、全変更対象が一致するdiff要求は自動承認します。
-- 許可外の承認要求が表示された場合は未入力Enterまたは`/approve`で今回だけ承認し、`/allow`で承認して`config.json`の自動承認リストへ追加し、`/decline`で拒否します。
+- 許可外の承認要求が表示された場合は未入力Enterまたは`/approve`で今回だけ承認し、`/allow`で要求コマンドを承認できます。`/allow-job`は現在のジョブ中、`/allow-process`は現在のプロセス中の全コマンドを許可し、`/allow <command>`は指定コマンドを`config.json`の自動承認リストへ追加します。`/decline`で拒否します。
 - CLIはプロンプトをシェルに渡しませんが、AI CLIにはそのまま渡されます。
 - FIFOやCLIの標準出力には、必要に応じて適切なUnix権限を設定してください。
 - 実行するユーザーには、作業ディレクトリとAI CLIを実行する権限が必要です。

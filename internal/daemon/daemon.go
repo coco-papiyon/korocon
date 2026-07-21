@@ -70,7 +70,19 @@ type residentJob struct {
 type approvalPrompt struct {
 	decision chan string
 	command  string
+	jobID    uint64
 }
+
+type jobContextKey struct{}
+
+type approvalScope uint8
+
+const (
+	approvalScopeApprove approvalScope = iota
+	approvalScopePermanent
+	approvalScopeJob
+	approvalScopeProcess
+)
 
 const maxProgressDots = 40
 
@@ -100,6 +112,8 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 	var pendingApproval *approvalPrompt
 	approvalQueue := make(chan struct{}, 1)
 	allowedCommands := normalizeAllowedCommands(cfg.AllowedCommands)
+	temporaryProcessAllowAll := false
+	temporaryJobAllowAll := make(map[uint64]bool)
 	allowedPaths := normalizeAllowedPaths(cfg.AllowedPaths)
 	logOut := synchronizedWriter{mu: &logMu, dst: cfg.LogOut}
 	logErr := synchronizedWriter{mu: &logMu, dst: cfg.LogErr}
@@ -138,8 +152,14 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		}
 		allowedMu.RLock()
 		allowed := append([]string(nil), allowedCommands...)
+		jobID, hasJobID := requestCtx.Value(jobContextKey{}).(uint64)
+		allowAllCommands := temporaryProcessAllowAll || (hasJobID && temporaryJobAllowAll[jobID])
 		paths := append([]string(nil), allowedPaths...)
 		allowedMu.RUnlock()
+		if method == "item/commandExecution/requestApproval" && allowAllCommands {
+			status("\r\033[2K[自動承認] %s\n", approvalDescription(method, params))
+			return map[string]string{"decision": "accept"}, nil
+		}
 		if method == "item/commandExecution/requestApproval" && commandRequestAllowed(params, allowed) {
 			status("\r\033[2K[自動承認] %s\n", approvalDescription(method, params))
 			return map[string]string{"decision": "accept"}, nil
@@ -164,7 +184,8 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		if !pathRequest {
 			command = approvalCommand(params)
 		}
-		prompt := &approvalPrompt{decision: make(chan string, 1), command: command}
+		jobID, _ = requestCtx.Value(jobContextKey{}).(uint64)
+		prompt := &approvalPrompt{decision: make(chan string, 1), command: command, jobID: jobID}
 		approvalMu.Lock()
 		pendingApproval = prompt
 		approvalMu.Unlock()
@@ -188,7 +209,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		if description == "" {
 			description = method
 		}
-		guidance := "未入力状態でEnterまたは/approveで承認、/allowで承認して自動承認コマンドへ追加、/declineで拒否します。"
+		guidance := "未入力状態でEnterまたは/approveで今回だけ承認、/allowで要求コマンドを承認、/allow-jobでこのジョブ中の全コマンド、/allow-processでこのプロセス中の全コマンドを許可します。/allow <command>で指定コマンドを恒久的な許可リストへ追加し、/declineで拒否します。"
 		if pathRequest {
 			guidance = "未入力状態でEnterまたは/approveで承認、/declineで拒否します。恒久的に許可する場合はconfigのbuiltinAllowedPathsへglobを追加してください。"
 		}
@@ -233,7 +254,12 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		_ = SystemMessage(out, fmt.Sprintf(format, args...))
 	}
 	var start func(string)
-	respondApproval := func(decision string, addAllowed bool) {
+	clearJobCommands := func(jobID uint64) {
+		allowedMu.Lock()
+		delete(temporaryJobAllowAll, jobID)
+		allowedMu.Unlock()
+	}
+	respondApproval := func(decision string, scope approvalScope, explicitCommand string) {
 		approvalMu.Lock()
 		approval := pendingApproval
 		approvalMu.Unlock()
@@ -241,8 +267,30 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			system(commandOut, "承認待ちの操作はありません。")
 			return
 		}
-		if addAllowed {
-			if approval.command == "" {
+		if scope == approvalScopeJob || scope == approvalScopeProcess {
+			allowedMu.Lock()
+			if scope == approvalScopeJob {
+				if approval.jobID == 0 {
+					allowedMu.Unlock()
+					system(commandOut, "ジョブを特定できないため、ジョブ内許可を設定できません。")
+					return
+				}
+				temporaryJobAllowAll[approval.jobID] = true
+			} else {
+				temporaryProcessAllowAll = true
+			}
+			allowedMu.Unlock()
+			if scope == approvalScopeJob {
+				system(commandOut, "このジョブのすべてのコマンドを一時許可しました。")
+			} else {
+				system(commandOut, "このプロセスのすべてのコマンドを一時許可しました。")
+			}
+		} else if scope == approvalScopePermanent {
+			command := strings.TrimSpace(explicitCommand)
+			if command == "" {
+				command = approval.command
+			}
+			if command == "" {
 				system(commandOut, "自動承認へ追加できるコマンドを取得できませんでした。")
 				return
 			}
@@ -250,14 +298,14 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				system(commandOut, "自動承認コマンドの保存機能が設定されていません。")
 				return
 			}
-			if err := cfg.AddAllowedCommand(approval.command); err != nil {
+			if err := cfg.AddAllowedCommand(command); err != nil {
 				system(commandOut, "自動承認コマンドの保存に失敗しました: %v", err)
 				return
 			}
 			allowedMu.Lock()
-			allowedCommands = normalizeAllowedCommands(append(allowedCommands, approval.command))
+			allowedCommands = normalizeAllowedCommands(append(allowedCommands, command))
 			allowedMu.Unlock()
-			system(commandOut, "自動承認コマンドへ追加しました: %s", approval.command)
+			system(commandOut, "自動承認コマンドへ追加しました: %s", command)
 		}
 		select {
 		case approval.decision <- decision:
@@ -322,12 +370,24 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			if cfg.OnModelChange != nil {
 				cfg.OnModelChange(selected)
 			}
-		case "/approve", "/allow", "/decline":
+		case "/approve", "/allow", "/allow-job", "/allow-process", "/decline":
 			decision := "accept"
 			if fields[0] == "/decline" {
 				decision = "decline"
 			}
-			respondApproval(decision, fields[0] == "/allow")
+			scope := approvalScopeApprove
+			explicitCommand := ""
+			if fields[0] == "/allow-job" {
+				scope = approvalScopeJob
+			} else if fields[0] == "/allow-process" {
+				scope = approvalScopeProcess
+			} else if fields[0] == "/allow" {
+				if commandText := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), fields[0])); commandText != "" {
+					scope = approvalScopePermanent
+					explicitCommand = commandText
+				}
+			}
+			respondApproval(decision, scope, explicitCommand)
 		case "/diff":
 			diffMu.RLock()
 			diff, available := latestDiff, hasLatestDiff
@@ -428,6 +488,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			}
 			var result runner.TurnResult
 			var err error
+			jobCtx := context.WithValue(ctx, jobContextKey{}, job.id)
 			if job.execute != nil {
 				sessionMu.Lock()
 				if primarySession != nil {
@@ -435,7 +496,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 					primarySession = nil
 				}
 				sessionMu.Unlock()
-				result, err = job.execute(ctx, job.model, handleServerRequest, setPhase, showProgress)
+				result, err = job.execute(jobCtx, job.model, handleServerRequest, setPhase, showProgress)
 			} else {
 				sessionMu.Lock()
 				if primarySession == nil {
@@ -444,7 +505,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				session := primarySession
 				sessionMu.Unlock()
 				if err == nil {
-					result, err = session.RunTurn(ctx, job.prompt, "", showProgress)
+					result, err = session.RunTurn(jobCtx, job.prompt, "", showProgress)
 				}
 			}
 			if diff, diffErr := captureGitDiff(cfg.WorkingDir); diffErr == nil {
@@ -458,9 +519,11 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				status("\r\033[2K[job %d] 失敗\n", displayID)
 				if cfg.OnJobFinish != nil {
 					if handleFinishError(job.id, cfg.OnJobFinish(ctx, job.id, job.prompt, "", err)) {
+						clearJobCommands(job.id)
 						continue
 					}
 				}
+				clearJobCommands(job.id)
 				promptMark()
 				continue
 			}
@@ -477,9 +540,11 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			}
 			if cfg.OnJobFinish != nil {
 				if handleFinishError(job.id, cfg.OnJobFinish(ctx, job.id, job.prompt, result.Text, nil)) {
+					clearJobCommands(job.id)
 					continue
 				}
 			}
+			clearJobCommands(job.id)
 			promptMark()
 		}
 	}()
@@ -529,7 +594,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			approval := pendingApproval
 			approvalMu.Unlock()
 			if approval != nil {
-				respondApproval("accept", false)
+				respondApproval("accept", approvalScopeApprove, "")
 				promptMark()
 				return
 			}

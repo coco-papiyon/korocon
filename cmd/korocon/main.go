@@ -1675,7 +1675,10 @@ Interactive mode:
 Interactive commands:
   /model [NUMBER|NAME]  list or switch the model
   /approve              approve the pending Codex operation
-  /allow                approve and add the command to automatic approvals
+  /allow                approve the requested command
+  /allow <command>      add the specified command to permanent approvals and approve
+  /allow-job            allow all commands for the current job
+  /allow-process        allow all commands for the current process
   /decline              decline the pending Codex operation
   /diff                 print the latest completed job's git diff
   /diff FILE            save that diff under the working directory

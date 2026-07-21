@@ -28,6 +28,52 @@ type concurrentApprovalSession struct {
 	errs      []error
 }
 
+type transientApprovalSession struct {
+	handler             runner.ServerRequestHandler
+	calls               int
+	secondRequestAuto   bool
+	secondJobRequestErr error
+}
+
+func (s *transientApprovalSession) RunTurn(ctx context.Context, _ string, _ string, _ func()) (runner.TurnResult, error) {
+	s.calls++
+	params, _ := json.Marshal(map[string]string{"command": "temporary-command"})
+	if s.calls == 1 {
+		if _, err := s.handler(ctx, "item/commandExecution/requestApproval", params); err != nil {
+			return runner.TurnResult{}, err
+		}
+		_, err := s.handler(ctx, "item/commandExecution/requestApproval", params)
+		s.secondRequestAuto = err == nil
+		return runner.TurnResult{Text: "first"}, err
+	}
+	_, err := s.handler(ctx, "item/commandExecution/requestApproval", params)
+	s.secondJobRequestErr = err
+	return runner.TurnResult{Text: "second"}, err
+}
+
+func (s *transientApprovalSession) Close() error { return nil }
+
+type approvalStepReader struct {
+	prompts <-chan struct{}
+	steps   []struct {
+		line string
+		wait bool
+	}
+	index int
+}
+
+func (r *approvalStepReader) Read(p []byte) (int, error) {
+	if r.index >= len(r.steps) {
+		return 0, io.EOF
+	}
+	step := r.steps[r.index]
+	r.index++
+	if step.wait {
+		<-r.prompts
+	}
+	return copy(p, step.line+"\n"), nil
+}
+
 func (s *concurrentApprovalSession) RunTurn(ctx context.Context, _ string, _ string, _ func()) (runner.TurnResult, error) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -196,6 +242,38 @@ func TestRunQueuesConcurrentManualApprovals(t *testing.T) {
 	}
 	if got := strings.Count(status.String(), "[承認待ち]"); got != 3 {
 		t.Fatalf("approval prompts = %d, want 3: %q", got, status.String())
+	}
+}
+
+func TestRunAllowsCommandForCurrentJobOnly(t *testing.T) {
+	oldStart := startDaemonSession
+	var session *transientApprovalSession
+	startDaemonSession = func(_ context.Context, cfg runner.SessionConfig) (runner.AgentSession, error) {
+		session = &transientApprovalSession{handler: cfg.HandleRequest}
+		return session, nil
+	}
+	defer func() { startDaemonSession = oldStart }()
+
+	prompts := make(chan struct{}, 2)
+	status := &approvalSignalWriter{prompts: prompts}
+	in := &approvalStepReader{prompts: prompts, steps: []struct {
+		line string
+		wait bool
+	}{
+		{line: "/allow-job", wait: true},
+		{line: "next", wait: false},
+		{line: "/approve", wait: true},
+	}}
+	if err := Run(context.Background(), in, io.Discard, Config{
+		Provider: "copilot", InitialPrompt: "first", StatusOut: status,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if session == nil || !session.secondRequestAuto || session.secondJobRequestErr != nil {
+		t.Fatalf("session = %+v", session)
+	}
+	if got := strings.Count(status.String(), "[承認待ち]"); got != 2 {
+		t.Fatalf("approval prompts = %d, want 2: %q", got, status.String())
 	}
 }
 

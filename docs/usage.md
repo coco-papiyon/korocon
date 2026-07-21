@@ -312,7 +312,7 @@ CopilotのACP承認要求に`path`または`fileName`が含まれる場合は`bu
 
 Issue実装・検証用Copilotセッションでは、`branches-<リポジトリ名>/<リポジトリ名>-<Issue番号>`として実際に作成または再利用したworktree配下を設定なしで自動承認します。通常のCLIセッションやworktree外のパスには適用しません。diffは全変更対象が同じworktree配下の場合だけ承認します。
 
-許可リストに一致しない操作やファイル変更要求は画面へ表示します。未入力状態でEnterまたは`/approve`を入力すると今回だけ承認し、`/decline`で拒否します。`/allow`を入力すると今回の操作を承認し、Codexの`commandActions`から抽出した具体的なコマンドを実行中の許可リストとバイナリ横の`config.json`へ追加します。Linuxの先頭環境変数代入は除去して保存するため、`GOCACHE=/tmp/cache go test ./...`は`go test ./...`として追加されます。設定保存に失敗した場合は承認せず、承認待ちを継続します。`--dangerously-bypass-approvals-and-sandbox`は使用しません。
+許可リストに一致しない操作やファイル変更要求は画面へ表示します。未入力状態でEnterまたは`/approve`を入力すると今回だけ承認し、`/allow`は要求内容からアプリが判断したコマンドを承認します。`/allow-job`は現在のジョブ中のすべてのコマンド、`/allow-process`は現在のkoroconプロセス中のすべてのコマンドを一時許可します。`/allow <command>`を入力すると、指定コマンドを恒久的な許可リストとバイナリ横の`config.json`へ追加して承認します。Linuxの先頭環境変数代入は除去して保存するため、`GOCACHE=/tmp/cache go test ./...`は`go test ./...`として追加されます。一時許可は設定ファイルへ保存せず、ジョブまたはプロセスの終了時に破棄します。設定保存に失敗した場合は承認せず、承認待ちを継続します。`--dangerously-bypass-approvals-and-sandbox`は使用しません。
 
 ```text
 AI:

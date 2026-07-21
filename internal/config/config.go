@@ -45,7 +45,8 @@ var defaultAllowedCommands = []string{
 	"git --no-pager diff", "git --no-pager grep", "git --no-pager log", "git --no-pager show", "git --no-pager status",
 	"gh pr view", "gh pr diff", "gh pr checks", "gh issue view",
 	"command -v", "cd", "true", "test",
-	"ls", "dir", "cat", "type", "more", "head", "echo", "printf", "sed", "set", "pwd", "grep", "rg", "find", "tee", "wc",
+	"ls", "dir", "cat", "type", "more", "head", "echo", "printf", "sed", "set", "pwd", "grep", "rg", "find", "sort", "tee", "wc",
+	"git branch --show-current",
 	"get-childitem", "get-content", "select-object", "select-string",
 }
 
