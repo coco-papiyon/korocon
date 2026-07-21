@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	appconfig "github.com/coco-papiyon/korocon/internal/config"
 	"github.com/coco-papiyon/korocon/internal/runner"
 )
 
@@ -460,8 +461,11 @@ func (e *FixEngine) ensureWorktree(ctx context.Context) (string, error) {
 	if _, err := gitOutput(ctx, repositoryDir, "fetch", "--prune", "origin"); err != nil {
 		return "", fmt.Errorf("fetch PR head: %w", err)
 	}
-	repositoryName := strings.TrimSuffix(filepath.Base(filepath.Clean(repositoryDir)), ".git")
-	root := strings.NewReplacer("<リポジトリ名>", repositoryName, "<repositoryName>", repositoryName).Replace(e.cfg.ImplementationDirectory)
+	repositoryName := appconfig.RepositoryName(repositoryDir)
+	root, err := appconfig.ExpandTemplate(e.cfg.ImplementationDirectory, appconfig.TemplateData{IssueNumber: e.cfg.Number, RepositoryName: repositoryName})
+	if err != nil {
+		return "", fmt.Errorf("expand implementation directory: %w", err)
+	}
 	if strings.TrimSpace(root) == "" {
 		root = "../" + repositoryName + "-branches/"
 	}

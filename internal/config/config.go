@@ -15,7 +15,7 @@ import (
 
 const FileName = "config.json"
 
-const defaultImplementationDirectory = "../branches-<リポジトリ名>/"
+const defaultImplementationDirectory = "../branches-{{ repository_name }}/"
 
 type Config struct {
 	WorkspaceName              string   `json:"workspaceName"`
@@ -55,7 +55,7 @@ var defaultAllowedPaths = []string{
 
 func Default() Config {
 	return Config{
-		WorkspaceName: ".workspace", BranchNamePattern: "issue_#<issue番号>",
+		WorkspaceName: ".workspace", BranchNamePattern: "issue_#{{ issue_number }}",
 		ImplementationDirectory: defaultImplementationDirectory, ImplementationLoopCount: 3,
 		AutoPollingInterval: "5m", BaseBranch: "main", RuntimeVerificationEnabled: true,
 		BuiltinAllowedCommands: DefaultAllowedCommands(),
@@ -240,7 +240,7 @@ func loadFile(path string) (Config, error) {
 	}
 	configured.BranchNamePattern = strings.TrimSpace(configured.BranchNamePattern)
 	if configured.BranchNamePattern == "" {
-		configured.BranchNamePattern = "issue_#<issue番号>"
+		configured.BranchNamePattern = "issue_#{{ issue_number }}"
 	}
 	configured.ImplementationDirectory = strings.TrimSpace(configured.ImplementationDirectory)
 	if configured.ImplementationDirectory == "" {

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	appconfig "github.com/coco-papiyon/korocon/internal/config"
 	"github.com/coco-papiyon/korocon/internal/runner"
 )
 
@@ -70,10 +71,10 @@ func New(cfg Config) *Engine {
 		cfg.WorkspaceName = ".workspace"
 	}
 	if strings.TrimSpace(cfg.ImplementationDirectory) == "" {
-		cfg.ImplementationDirectory = "../branches-<リポジトリ名>/"
+		cfg.ImplementationDirectory = "../branches-{{ repository_name }}/"
 	}
 	if strings.TrimSpace(cfg.BranchNamePattern) == "" {
-		cfg.BranchNamePattern = "issue_#<issue番号>"
+		cfg.BranchNamePattern = "issue_#{{ issue_number }}"
 	}
 	if strings.TrimSpace(cfg.BaseBranch) == "" {
 		cfg.BaseBranch = "main"
@@ -382,16 +383,20 @@ func (e *Engine) ensureWorktree(ctx context.Context) (string, string, error) {
 	if err != nil {
 		return "", "", fmt.Errorf("resolve repository directory: %w", err)
 	}
-	repositoryName := strings.TrimSuffix(filepath.Base(filepath.Clean(repositoryDir)), ".git")
-	root := strings.NewReplacer(
-		"<リポジトリ名>", repositoryName,
-		"<repositoryName>", repositoryName,
-	).Replace(e.cfg.ImplementationDirectory)
+	repositoryName := appconfig.RepositoryName(repositoryDir)
+	root, err := appconfig.ExpandTemplate(e.cfg.ImplementationDirectory, appconfig.TemplateData{IssueNumber: e.cfg.IssueNumber, RepositoryName: repositoryName})
+	if err != nil {
+		return "", "", fmt.Errorf("expand implementation directory: %w", err)
+	}
 	if !filepath.IsAbs(root) {
 		root = filepath.Join(repositoryDir, root)
 	}
 	worktree := filepath.Clean(filepath.Join(root, repositoryName+"-"+strconv.Itoa(e.cfg.IssueNumber)))
-	branch := renderBranchName(e.cfg.BranchNamePattern, e.cfg.IssueNumber)
+	branch, err := appconfig.ExpandTemplate(e.cfg.BranchNamePattern, appconfig.TemplateData{IssueNumber: e.cfg.IssueNumber, RepositoryName: repositoryName})
+	if err != nil {
+		return "", "", fmt.Errorf("expand branch name: %w", err)
+	}
+	branch = strings.TrimSpace(branch)
 	if strings.TrimSpace(branch) == "" {
 		return "", "", errors.New("branch name is empty")
 	}
@@ -497,13 +502,6 @@ func parseVerification(raw string) (verification, error) {
 		return verification{}, fmt.Errorf("unsupported verifier status %q", result.Status)
 	}
 	return result, nil
-}
-
-func renderBranchName(pattern string, issueNumber int) string {
-	number := strconv.Itoa(issueNumber)
-	result := strings.ReplaceAll(pattern, "<issue番号>", number)
-	result = strings.ReplaceAll(result, "<issueNumber>", number)
-	return strings.TrimSpace(result)
 }
 
 func sanitizePart(value string) string {

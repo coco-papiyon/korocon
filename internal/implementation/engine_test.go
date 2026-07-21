@@ -37,7 +37,7 @@ func TestEnsureWorktreeCreatesConfiguredBranch(t *testing.T) {
 	runGit(t, repository, "add", "README.md")
 	runGit(t, repository, "commit", "-m", "initial")
 
-	engine := New(Config{RepositoryDir: repository, BranchNamePattern: "issue_#<issue番号>", IssueNumber: 9})
+	engine := New(Config{RepositoryDir: repository, BranchNamePattern: "issue_#{{ issue_number }}", IssueNumber: 9})
 	path, branch, err := engine.ensureWorktree(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +68,7 @@ func TestEnsureWorktreePrunesRegistrationWhenDirectoryWasRemoved(t *testing.T) {
 	runGit(t, repository, "add", "README.md")
 	runGit(t, repository, "commit", "-m", "initial")
 
-	engine := New(Config{RepositoryDir: repository, ImplementationDirectory: "../", BranchNamePattern: "issue_#<issue番号>", IssueNumber: 10})
+	engine := New(Config{RepositoryDir: repository, ImplementationDirectory: "../", BranchNamePattern: "issue_#{{ issue_number }}", IssueNumber: 10})
 	path, _, err := engine.ensureWorktree(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +140,7 @@ func TestEngineRepeatsImplementationUntilVerificationPasses(t *testing.T) {
 	engine := New(Config{
 		Provider: "copilot", VerifierProvider: "codex", VerifierModel: "gpt-verifier",
 		RepositoryDir: repository, WorkspaceName: ".workspace", ImplementationDirectory: "../",
-		BranchNamePattern: "issue_#<issue番号>", LoopCount: 3,
+		BranchNamePattern: "issue_#{{ issue_number }}", LoopCount: 3,
 		IssueNumber: 42, IssueTitle: "Add feature", IssueContext: "issue context",
 		LogOut: io.Discard, LogErr: io.Discard,
 	})
@@ -196,7 +196,7 @@ func TestEnsureWorktreeSkipsExistingDirectory(t *testing.T) {
 	if err := os.MkdirAll(worktree, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	engine := New(Config{RepositoryDir: repository, ImplementationDirectory: "../", BranchNamePattern: "feature/<issueNumber>", IssueNumber: 7})
+	engine := New(Config{RepositoryDir: repository, ImplementationDirectory: "../", BranchNamePattern: "feature/{{ issue_number }}", IssueNumber: 7})
 	path, branch, err := engine.ensureWorktree(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -229,7 +229,7 @@ func TestPublishCommitsPushesAndCreatesPullRequest(t *testing.T) {
 	runGit(t, repository, "remote", "add", "origin", remote)
 
 	engine := New(Config{
-		RepositoryDir: repository, ImplementationDirectory: "../", BranchNamePattern: "issue_#<issue番号>",
+		RepositoryDir: repository, ImplementationDirectory: "../", BranchNamePattern: "issue_#{{ issue_number }}",
 		BaseBranch: "main", IssueNumber: 42, IssueTitle: "Add feature", Reviewer: "octocat",
 	})
 	worktree, branch, err := engine.ensureWorktree(context.Background())

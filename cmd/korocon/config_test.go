@@ -31,7 +31,7 @@ func TestInitializeConfigPromptsSettingsAndModels(t *testing.T) {
 	}
 
 	configured := readSavedConfig(t, path)
-	if configured.BaseBranch != "develop" || configured.BranchNamePattern != "issue_#<issue番号>" || configured.StartupCommand != "go run ./cmd/app" {
+	if configured.BaseBranch != "develop" || configured.BranchNamePattern != "issue_#{{ issue_number }}" || configured.StartupCommand != "go run ./cmd/app" {
 		t.Fatalf("general settings = %+v", configured)
 	}
 	if configured.ImplementerProvider != "codex" || configured.ImplementerModel != "gpt-5.6-terra" {
@@ -43,7 +43,7 @@ func TestInitializeConfigPromptsSettingsAndModels(t *testing.T) {
 	if configured.ReviewerProvider != "copilot" || configured.ReviewerModel != "auto" {
 		t.Fatalf("reviewer settings = %+v", configured)
 	}
-	for _, prompt := range []string{"baseBranch [main]:", "branchNamePattern [issue_#<issue番号>]:", "startupCommand [未設定]:", "実装者Provider", "検証者Model", "レビューアModel"} {
+	for _, prompt := range []string{"baseBranch [main]:", "branchNamePattern [issue_#{{ issue_number }}]:", "startupCommand [未設定]:", "実装者Provider", "検証者Model", "レビューアModel"} {
 		if !strings.Contains(out.String(), prompt) {
 			t.Fatalf("output does not contain %q: %q", prompt, out.String())
 		}

@@ -18,7 +18,7 @@ func TestLoadFileUsesDefaultWhenMissing(t *testing.T) {
 	if configured.WorkspaceName != ".workspace" {
 		t.Fatalf("workspaceName = %q", configured.WorkspaceName)
 	}
-	if configured.BranchNamePattern != "issue_#<issue番号>" || configured.ImplementationDirectory != "../branches-<リポジトリ名>/" || configured.ImplementationLoopCount != 3 {
+	if configured.BranchNamePattern != "issue_#{{ issue_number }}" || configured.ImplementationDirectory != "../branches-{{ repository_name }}/" || configured.ImplementationLoopCount != 3 {
 		t.Fatalf("defaults = %+v", configured)
 	}
 	if configured.BaseBranch != "main" {
@@ -38,6 +38,28 @@ func TestLoadFileUsesDefaultWhenMissing(t *testing.T) {
 	}
 	if configured.ImplementerProvider != "codex" || configured.ImplementerModel != "gpt-5.6-luna" || configured.VerifierProvider != "" || configured.ReviewerProvider != "" {
 		t.Fatalf("role defaults = %+v", configured)
+	}
+}
+
+func TestExpandTemplate(t *testing.T) {
+	got, err := ExpandTemplate("issue_#{{ issue_number }}-{{ repository_name }}", TemplateData{IssueNumber: 23, RepositoryName: "korocon"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "issue_#23-korocon" {
+		t.Fatalf("expanded template = %q", got)
+	}
+
+	got, err = ExpandTemplate("../branches-{{ repository_name }}/", TemplateData{RepositoryName: "korocon"})
+	if err != nil || got != "../branches-korocon/" {
+		t.Fatalf("repository template = %q, err=%v", got, err)
+	}
+
+	if _, err := ExpandTemplate("{{ unknown }}", TemplateData{}); err == nil {
+		t.Fatal("unknown variable was accepted")
+	}
+	if _, err := ExpandTemplate("issue_#<issue番号>", TemplateData{IssueNumber: 23}); err == nil {
+		t.Fatal("legacy placeholder was accepted")
 	}
 }
 
@@ -283,7 +305,7 @@ func TestAddBuiltinAllowedPathAndSave(t *testing.T) {
 
 func TestLoadFileReadsImplementationSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), FileName)
-	content := []byte(`{"workspaceName":".workspace","branchNamePattern":"feature/<issueNumber>","implementationDirectory":"../worktrees","implementationLoopCount":5}`)
+	content := []byte(`{"workspaceName":".workspace","branchNamePattern":"feature/{{ issue_number }}","implementationDirectory":"../worktrees","implementationLoopCount":5}`)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +313,7 @@ func TestLoadFileReadsImplementationSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if configured.BranchNamePattern != "feature/<issueNumber>" || configured.ImplementationDirectory != "../worktrees" || configured.ImplementationLoopCount != 5 {
+	if configured.BranchNamePattern != "feature/{{ issue_number }}" || configured.ImplementationDirectory != "../worktrees" || configured.ImplementationLoopCount != 5 {
 		t.Fatalf("config = %+v", configured)
 	}
 }

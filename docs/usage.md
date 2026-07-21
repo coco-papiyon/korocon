@@ -59,8 +59,8 @@ tools/
 ```json
 {
   "workspaceName": ".workspace",
-  "branchNamePattern": "issue_#<issue番号>",
-  "implementationDirectory": "../branches-<リポジトリ名>/",
+  "branchNamePattern": "issue_#{{ issue_number }}",
+  "implementationDirectory": "../branches-{{ repository_name }}/",
   "implementationLoopCount": 3,
   "autoPollingInterval": "5m",
   "baseBranch": "main",
@@ -82,8 +82,8 @@ tools/
 
 | 設定 | 既定値 | 内容 |
 | --- | --- | --- |
-| `branchNamePattern` | `issue_#<issue番号>` | 実装worktreeのブランチ名。`<issue番号>`または`<issueNumber>`を置換します。 |
-| `implementationDirectory` | `../branches-<リポジトリ名>/` | 実装worktreeを置く親ディレクトリ。相対パスは対象リポジトリ基準で、`<リポジトリ名>`または`<repositoryName>`を置換します。 |
+| `branchNamePattern` | `issue_#{{ issue_number }}` | 実装worktreeのブランチ名。設定値はテンプレートとして展開されます。 |
+| `implementationDirectory` | `../branches-{{ repository_name }}/` | 実装worktreeを置く親ディレクトリ。設定値はテンプレートとして展開されます。 |
 | `implementationLoopCount` | `3` | Issue実装およびPRレビュー指摘修正の実装・検証の最大試行回数。最大10回です。 |
 | `autoPollingInterval` | `5m` | `--auto`で対象がない場合に再取得するまでの待機期間です。`30s`、`5m`、`1h`などの正の期間を指定します。 |
 | `baseBranch` | `main` | 実装承認時に作成するPRのbaseブランチです。 |
@@ -98,6 +98,13 @@ tools/
 | `reviewerProvider` | 実装者と同じ | PRレビューを担当するProviderです。 |
 | `reviewerModel` | 実装者と同じ | レビューアのModelです。 |
 | `reviewer` | 未設定 | 新規PRでレビューを依頼するGitHubユーザーです。PRのassigneeは常に現在のGitHubユーザー（`@me`）になります。 |
+
+`branchNamePattern`と`implementationDirectory`では、次の内部変数を使用できます。
+
+- `{{ issue_number }}`: Issue番号（PRのworktreeではPR番号）
+- `{{ repository_name }}`: 対象リポジトリ名
+
+例: `issue_#{{ issue_number }}`、`../{{ repository_name }}-branches/`
 
 設定ファイル値はCLI引数で上書きできます。`--provider`と`--model`は互換性のため残しており、実装者指定として扱います。
 
@@ -317,7 +324,7 @@ GitHub:
   github reviewer : 未設定
 
 Workflow:
-  branch          : issue_#<issue番号>
+  branch          : issue_#{{ issue_number }}
   base branch     : main
   startup command : 未設定
 >
