@@ -53,6 +53,7 @@ type prWorkflow interface {
 	Start(context.Context) error
 	Finish(context.Context, error) error
 	SaveResult(string) (string, error)
+	SaveVerificationResult(string) (string, error)
 	ApproveReview(context.Context, string) error
 	RequestChanges(context.Context, string, string) error
 	ApproveFix(context.Context, string) error
@@ -128,7 +129,11 @@ func (c *prReviewController) OnJobStart(ctx context.Context, id uint64, prompt s
 	}
 	c.prompts[prompt]--
 	c.jobs[id] = struct{}{}
+	verification := c.workflow.CurrentPhase() == prworkflow.PhaseVerification
 	c.mu.Unlock()
+	if verification {
+		return nil
+	}
 	if err := c.workflow.Start(ctx); err != nil {
 		c.mu.Lock()
 		delete(c.jobs, id)
@@ -146,6 +151,22 @@ func (c *prReviewController) OnJobFinish(ctx context.Context, id uint64, prompt 
 	c.mu.Unlock()
 	if !tracked {
 		return nil
+	}
+	if c.workflow.CurrentPhase() == prworkflow.PhaseVerification {
+		if runErr != nil {
+			c.mu.Lock()
+			c.failed = true
+			c.failedPrompt = prompt
+			_, err := fmt.Fprintln(c.out, failureOptions())
+			c.mu.Unlock()
+			return err
+		}
+		artifact, err := c.workflow.SaveVerificationResult(result)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(c.out, "動作確認結果を保存しました: %s\n動作確認が完了しました。結果を確認し、問題がなければPRをクローズして未入力状態でEnterまたは/checkを入力してください。\n", artifact)
+		return err
 	}
 	artifact := ""
 	if runErr == nil {
@@ -331,13 +352,15 @@ func (c *prReviewController) HandleInput(ctx context.Context, input string) (dae
 			}
 			c.mu.Lock()
 			c.workflow.SetPhase(prworkflow.PhaseVerification)
+			verificationPrompt := runtimeVerificationPrompt(verification)
+			c.prompts[verificationPrompt]++
 			c.mu.Unlock()
 			message := "レビューを承認しました。AIにworktreeでの動作確認を指示します。"
 			if verification != "" {
 				message += "\n動作確認コマンドを起動しました: " + verification
 			}
 			_, err := fmt.Fprintf(c.out, "%s\n動作確認後にPRをクローズし、未入力状態でEnterまたは/checkを入力してください。\n", message)
-			return daemon.InputAction{Handled: true, Prompt: runtimeVerificationPrompt(verification)}, err
+			return daemon.InputAction{Handled: true, Prompt: verificationPrompt}, err
 		}
 		instruction := trimmed
 		if command == "/fix" {

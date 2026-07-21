@@ -16,6 +16,7 @@ type fakePRWorkflow struct {
 	completed        bool
 	state            string
 	approved         string
+	verification     string
 	changes          string
 	fixApproved      string
 	conflictApproved string
@@ -29,10 +30,14 @@ func (w *fakePRWorkflow) ConflictPrompt(s string) string      { return "conflict
 func (w *fakePRWorkflow) Start(context.Context) error         { return nil }
 func (w *fakePRWorkflow) Finish(context.Context, error) error { return nil }
 func (w *fakePRWorkflow) SaveResult(string) (string, error)   { return ".workspace/review/4_pr.md", nil }
-func (w *fakePRWorkflow) SetPhase(p prworkflow.Phase)         { w.phase = p }
-func (w *fakePRWorkflow) CurrentPhase() prworkflow.Phase      { return w.phase }
-func (w *fakePRWorkflow) Number() int                         { return 4 }
-func (w *fakePRWorkflow) URL() string                         { return w.url }
+func (w *fakePRWorkflow) SaveVerificationResult(result string) (string, error) {
+	w.verification = result
+	return ".workspace/verification/4_pr.md", nil
+}
+func (w *fakePRWorkflow) SetPhase(p prworkflow.Phase)    { w.phase = p }
+func (w *fakePRWorkflow) CurrentPhase() prworkflow.Phase { return w.phase }
+func (w *fakePRWorkflow) Number() int                    { return 4 }
+func (w *fakePRWorkflow) URL() string                    { return w.url }
 func (w *fakePRWorkflow) CompleteIfClosed(context.Context) (bool, string, error) {
 	return w.completed, w.state, nil
 }
@@ -339,6 +344,29 @@ func TestPRReviewApprovalStartsAIVerificationWithoutStartupCommand(t *testing.T)
 	}
 	if !strings.Contains(out.String(), "AIにworktreeでの動作確認を指示します") || strings.Contains(out.String(), "動作確認コマンドを起動しました") {
 		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestPRReviewVerificationSavesResultAndDisplaysCompletion(t *testing.T) {
+	workflow := &fakePRWorkflow{phase: prworkflow.PhaseReview}
+	var out bytes.Buffer
+	controller := newPRReviewController(workflow, &out, nil, nil, nil, func(context.Context) (string, error) {
+		return "", nil
+	}, nil)
+	completePRJob(t, controller, workflow.Prompt(), completeReviewResult("問題なし", "review result"))
+	action, err := controller.HandleInput(context.Background(), "approve")
+	if err != nil || action.Prompt == "" {
+		t.Fatalf("approval action=%+v err=%v", action, err)
+	}
+	if err := controller.OnJobStart(context.Background(), 2, action.Prompt); err != nil {
+		t.Fatal(err)
+	}
+	verification := "## 判定結果\n\n成功\n\n## 確認結果\n\n問題なし"
+	if err := controller.OnJobFinish(context.Background(), 2, action.Prompt, verification, nil); err != nil {
+		t.Fatal(err)
+	}
+	if workflow.verification != verification || !strings.Contains(out.String(), "動作確認結果を保存しました: .workspace/verification/4_pr.md") || !strings.Contains(out.String(), "動作確認が完了しました") {
+		t.Fatalf("verification=%q output=%q", workflow.verification, out.String())
 	}
 }
 

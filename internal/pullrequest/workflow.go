@@ -463,6 +463,28 @@ func (w *Workflow) SaveResult(result string) (string, error) {
 	return filepath.ToSlash(relative), nil
 }
 
+// SaveVerificationResult persists the runtime verification result separately
+// from the PR review result.
+func (w *Workflow) SaveVerificationResult(result string) (string, error) {
+	workspace := strings.TrimSpace(w.workspaceName)
+	if workspace == "" {
+		workspace = ".workspace"
+	}
+	path := filepath.Join(w.dir, workspace, "verification", fmt.Sprintf("%d_%s.md", w.PR.Number, sanitizePart(w.PR.Title)))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("create verification artifact directory: %w", err)
+	}
+	content := withTopLevelHeading("動作確認結果", result)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return "", fmt.Errorf("write verification artifact: %w", err)
+	}
+	relative, err := filepath.Rel(w.dir, path)
+	if err != nil {
+		return path, nil
+	}
+	return filepath.ToSlash(relative), nil
+}
+
 func (w *Workflow) resultArtifactPath() string {
 	workspace := strings.TrimSpace(w.workspaceName)
 	if workspace == "" {
