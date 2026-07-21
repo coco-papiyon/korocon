@@ -136,6 +136,7 @@ func printConfigList(out io.Writer, path string, configured appconfig.Config) er
 		{"implementationLoopCount", fmt.Sprint(configured.ImplementationLoopCount)},
 		{"autoPollingInterval", configured.AutoPollingInterval},
 		{"runtimeVerificationEnabled", strconv.FormatBool(configured.RuntimeVerificationEnabled)},
+		{"vscodeNotificationEnabled", strconv.FormatBool(configured.VSCodeNotificationEnabled)},
 		{"startupCommand", configured.StartupCommand},
 		{"implementerProvider", configured.ImplementerProvider},
 		{"implementerModel", configured.ImplementerModel},

@@ -30,6 +30,9 @@ func TestLoadFileUsesDefaultWhenMissing(t *testing.T) {
 	if !configured.RuntimeVerificationEnabled {
 		t.Fatal("runtimeVerificationEnabled = false, want true")
 	}
+	if !configured.VSCodeNotificationEnabled {
+		t.Fatal("vscodeNotificationEnabled = false, want true")
+	}
 	if !reflect.DeepEqual(configured.BuiltinAllowedCommands, DefaultAllowedCommands()) {
 		t.Fatalf("builtinAllowedCommands = %+v", configured.BuiltinAllowedCommands)
 	}
@@ -73,6 +76,7 @@ func TestSetValueUpdatesScalarSettings(t *testing.T) {
 		{"autoPollingInterval", "30s", func(c Config) bool { return c.AutoPollingInterval == "30s" }},
 		{"implementationLoopCount", "5", func(c Config) bool { return c.ImplementationLoopCount == 5 }},
 		{"runtimeVerificationEnabled", "false", func(c Config) bool { return !c.RuntimeVerificationEnabled }},
+		{"vscodeNotificationEnabled", "false", func(c Config) bool { return !c.VSCodeNotificationEnabled }},
 		{"reviewerProvider", "inherit", func(c Config) bool { return c.ReviewerProvider == "" }},
 		{"startupCommand", "go test ./...", func(c Config) bool { return c.StartupCommand == "go test ./..." }},
 	} {

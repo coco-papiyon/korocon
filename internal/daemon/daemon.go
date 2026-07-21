@@ -34,6 +34,7 @@ type Config struct {
 	InitialJob        *JobSpec
 	AllowedCommands   []string
 	AllowedPaths      []string
+	Notifier          Notifier
 	AddAllowedCommand func(string) error
 	BeforeJob         func(context.Context, uint64, string) error
 	OnJobStart        func(context.Context, uint64, string) error
@@ -137,6 +138,11 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		statusWriter := synchronizedWriter{mu: &logMu, dst: cfg.StatusOut}
 		_, _ = fmt.Fprintf(statusWriter, format, args...)
 	}
+	notify := func(message string) {
+		if cfg.Notifier != nil {
+			_ = cfg.Notifier.Notify(message)
+		}
+	}
 	promptMark := func() {
 		if cfg.StatusOut == nil {
 			return
@@ -214,6 +220,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			guidance = "未入力状態でEnterまたは/approveで承認、/declineで拒否します。恒久的に許可する場合はconfigのbuiltinAllowedPathsへglobを追加してください。"
 		}
 		status("\r\033[2K[承認待ち] %s\n%s\n", description, guidance)
+		notify("承認待ち: " + description)
 		promptMark()
 		select {
 		case <-requestCtx.Done():
@@ -517,6 +524,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			if err != nil {
 				_ = writeResult(job.id, "", err)
 				status("\r\033[2K[job %d] 失敗\n", displayID)
+				notify(fmt.Sprintf("ジョブ %d が失敗しました", displayID))
 				if cfg.OnJobFinish != nil {
 					if handleFinishError(job.id, cfg.OnJobFinish(ctx, job.id, job.prompt, "", err)) {
 						clearJobCommands(job.id)
@@ -524,6 +532,9 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 					}
 				}
 				clearJobCommands(job.id)
+				if len(residentJobs) == 0 {
+					notify("ユーザーの応答を待っています")
+				}
 				promptMark()
 				continue
 			}
@@ -532,6 +543,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			} else {
 				status("\r\033[2K[job %d] 完了\n", displayID)
 			}
+			notify(fmt.Sprintf("ジョブ %d が完了しました", displayID))
 			if result.Text != "" {
 				_, _ = io.WriteString(displayOut, result.Text)
 				if !strings.HasSuffix(result.Text, "\n") {
@@ -545,6 +557,9 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				}
 			}
 			clearJobCommands(job.id)
+			if len(residentJobs) == 0 {
+				notify("ユーザーの応答を待っています")
+			}
 			promptMark()
 		}
 	}()

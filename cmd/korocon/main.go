@@ -446,6 +446,9 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 				AllowedCommands: configured.BuiltinAllowedCommands,
 				AllowedPaths:    configured.BuiltinAllowedPaths,
 			}
+			if configured.VSCodeNotificationEnabled {
+				cfg.Notifier = daemon.NewVSCodeNotifier(stderr)
+			}
 			cfg.AddAllowedCommand = func(command string) error {
 				updated, _ := appconfig.AddBuiltinAllowedCommand(configured, command)
 				if err := appconfig.Save(configPath, updated); err != nil {

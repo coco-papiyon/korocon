@@ -88,6 +88,7 @@ tools/
 | `autoPollingInterval` | `5m` | `--auto`で対象がない場合に再取得するまでの待機期間です。`30s`、`5m`、`1h`などの正の期間を指定します。 |
 | `baseBranch` | `main` | 実装承認時に作成するPRのbaseブランチです。 |
 | `runtimeVerificationEnabled` | `true` | レビュー承認後にレビューアへPR head worktreeでの動作確認を指示するか指定します。 |
+| `vscodeNotificationEnabled` | `true` | VS Code統合ターミナルで、ジョブ完了・承認待ち・ユーザー入力待ちを通知するか指定します。 |
 | `startupCommand` | 未設定 | 動作確認が有効な場合にPR head worktreeで追加起動するコマンドです。標準出力と標準エラーはログファイルへ記録します。 |
 | `builtinAllowedCommands` | korobokcleと同じ既定リスト | Codexのコマンド実行要求を自動承認するコマンドです。省略または空配列では既定リストを使用します。 |
 | `builtinAllowedPaths` | `~/.copilot/session-state/*/plan.md` | Copilotのパス・diff要求を自動承認するglobです。diffは全変更対象が一致する場合だけ承認します。 |

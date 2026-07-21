@@ -25,6 +25,7 @@ type Config struct {
 	AutoPollingInterval        string   `json:"autoPollingInterval"`
 	BaseBranch                 string   `json:"baseBranch"`
 	RuntimeVerificationEnabled bool     `json:"runtimeVerificationEnabled"`
+	VSCodeNotificationEnabled  bool     `json:"vscodeNotificationEnabled"`
 	StartupCommand             string   `json:"startupCommand,omitempty"`
 	BuiltinAllowedCommands     []string `json:"builtinAllowedCommands"`
 	BuiltinAllowedPaths        []string `json:"builtinAllowedPaths"`
@@ -58,7 +59,7 @@ func Default() Config {
 	return Config{
 		WorkspaceName: ".workspace", BranchNamePattern: "issue_#{{ issue_number }}",
 		ImplementationDirectory: defaultImplementationDirectory, ImplementationLoopCount: 3,
-		AutoPollingInterval: "5m", BaseBranch: "main", RuntimeVerificationEnabled: true,
+		AutoPollingInterval: "5m", BaseBranch: "main", RuntimeVerificationEnabled: true, VSCodeNotificationEnabled: true,
 		BuiltinAllowedCommands: DefaultAllowedCommands(),
 		BuiltinAllowedPaths:    DefaultAllowedPaths(),
 		ImplementerProvider:    "codex", ImplementerModel: "gpt-5.6-luna",
@@ -169,6 +170,12 @@ func SetValue(configured Config, key, value string) (Config, error) {
 			return configured, fmt.Errorf("config %s: must be true or false: %q", key, value)
 		}
 		configured.RuntimeVerificationEnabled = enabled
+	case "vscodeNotificationEnabled":
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return configured, fmt.Errorf("config %s: must be true or false: %q", key, value)
+		}
+		configured.VSCodeNotificationEnabled = enabled
 	case "startupCommand":
 		configured.StartupCommand = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(value, "\r\n", "\n"), "\r", "\n"))
 	case "implementerProvider", "verifierProvider", "reviewerProvider":

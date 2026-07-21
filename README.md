@@ -45,6 +45,7 @@ korocon list pr --search 'is:open' --json
   "autoPollingInterval": "5m",
   "baseBranch": "main",
   "runtimeVerificationEnabled": true,
+  "vscodeNotificationEnabled": true,
   "implementerProvider": "codex",
   "implementerModel": "gpt-5.6-luna",
   "verifierProvider": "codex",

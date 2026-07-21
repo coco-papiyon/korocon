@@ -5,6 +5,7 @@
   "implementationLoopCount": 3,
   "autoPollingInterval": "5m",
   "baseBranch": "main",
+  "vscodeNotificationEnabled": true,
   "builtinAllowedCommands": [
     "npm install", "npm ci", "npm test",
     "go build", "go test", "go mod tidy", "go mod download",
