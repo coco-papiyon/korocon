@@ -18,7 +18,7 @@ func TestLoadFileUsesDefaultWhenMissing(t *testing.T) {
 	if configured.WorkspaceName != ".workspace" {
 		t.Fatalf("workspaceName = %q", configured.WorkspaceName)
 	}
-	if configured.BranchNamePattern != "issue_#<issue番号>" || configured.ImplementationDirectory != "../<リポジトリ名>-branches/" || configured.ImplementationLoopCount != 3 {
+	if configured.BranchNamePattern != "issue_#<issue番号>" || configured.ImplementationDirectory != "../branches-<リポジトリ名>/" || configured.ImplementationLoopCount != 3 {
 		t.Fatalf("defaults = %+v", configured)
 	}
 	if configured.BaseBranch != "main" {

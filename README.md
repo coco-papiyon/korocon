@@ -40,7 +40,7 @@ korocon list pr --search 'is:open' --json
 {
   "workspaceName": ".workspace",
   "branchNamePattern": "issue_#<issue番号>",
-  "implementationDirectory": "../<リポジトリ名>-branches/",
+  "implementationDirectory": "../branches-<リポジトリ名>/",
   "implementationLoopCount": 3,
   "autoPollingInterval": "5m",
   "baseBranch": "main",
@@ -121,7 +121,7 @@ Issueジョブが状態ラベルの更新に成功して実際に開始される
 [システム] Issue #2の実装を開始します。
 ```
 
-設計結果を承認すると、設計用Codexを停止して実装ジョブを自動開始します。既定では`../<リポジトリ名>-branches/<リポジトリ名>-<Issue番号>`にworktreeを作成し、`branchNamePattern`から生成したブランチをチェックアウトします。既存ディレクトリがある場合はworktree作成をスキップします。
+設計結果を承認すると、設計用Codexを停止して実装ジョブを自動開始します。既定では`../branches-<リポジトリ名>/<リポジトリ名>-<Issue番号>`にworktreeを作成し、`branchNamePattern`から生成したブランチをチェックアウトします。既存ディレクトリがある場合はworktree作成をスキップします。
 
 実装ジョブは実装用Codexと読み取り専用の検証用Codexを起動します。実装後に検証し、問題があれば検証指摘を実装用Codexへ返します。`implementationLoopCount`回以内に検証が合格すると結果を表示して承認待ちになります。既定値は3回、上限は10回です。
 

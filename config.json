@@ -1,7 +1,7 @@
 {
   "workspaceName": ".workspace",
   "branchNamePattern": "issue_#<issue番号>",
-  "implementationDirectory": "../<リポジトリ名>-branches/",
+  "implementationDirectory": "../branches-<リポジトリ名>/",
   "implementationLoopCount": 3,
   "autoPollingInterval": "5m",
   "baseBranch": "main",

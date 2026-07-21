@@ -70,7 +70,7 @@ func New(cfg Config) *Engine {
 		cfg.WorkspaceName = ".workspace"
 	}
 	if strings.TrimSpace(cfg.ImplementationDirectory) == "" {
-		cfg.ImplementationDirectory = "../<リポジトリ名>-branches/"
+		cfg.ImplementationDirectory = "../branches-<リポジトリ名>/"
 	}
 	if strings.TrimSpace(cfg.BranchNamePattern) == "" {
 		cfg.BranchNamePattern = "issue_#<issue番号>"

@@ -15,7 +15,7 @@ import (
 
 const FileName = "config.json"
 
-const defaultImplementationDirectory = "../<リポジトリ名>-branches/"
+const defaultImplementationDirectory = "../branches-<リポジトリ名>/"
 
 type Config struct {
 	WorkspaceName              string   `json:"workspaceName"`

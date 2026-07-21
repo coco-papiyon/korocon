@@ -42,7 +42,7 @@ func TestEnsureWorktreeCreatesConfiguredBranch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if path != filepath.Join(filepath.Dir(repository), "repo-branches", "repo-9") || branch != "issue_#9" {
+	if path != filepath.Join(filepath.Dir(repository), "branches-repo", "repo-9") || branch != "issue_#9" {
 		t.Fatalf("path=%q branch=%q", path, branch)
 	}
 	if _, err := os.Stat(filepath.Join(path, ".git")); err != nil {
