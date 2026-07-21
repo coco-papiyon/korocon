@@ -33,7 +33,7 @@ Copilotの自動承認パスは`korocon config allow-path "~/.copilot/session-st
 {
   "workspaceName": ".workspace",
   "branchNamePattern": "issue_#<issue番号>",
-  "implementationDirectory": "../<リポジトリ名>-branches/",
+  "implementationDirectory": "../branches-<リポジトリ名>/",
   "implementationLoopCount": 3,
   "autoPollingInterval": "5m",
   "baseBranch": "main",
@@ -85,7 +85,7 @@ Issueジョブの結果を表示すると、区切り線を挟んで承認また
 
 実装・検証ループの各応答は、`implementation/<issue番号>/<回数>回目_実装.md`と`implementation/<issue番号>/<回数>回目_検討.md`へそれぞれ保存します。
 
-設計承認後は`<implementationDirectory>/<リポジトリ名>-<Issue番号>`へworktreeを作成します。既定の親ディレクトリは`../<リポジトリ名>-branches/`です。そのworktreeで役割設定に従った実装用と検証用の2つのAIセッションを起動し、実装、読み取り専用検証、指摘反映を`implementationLoopCount`回まで繰り返して、検証合格後に実装承認を待ちます。
+設計承認後は`<implementationDirectory>/<リポジトリ名>-<Issue番号>`へworktreeを作成します。既定の親ディレクトリは`../branches-<リポジトリ名>/`です。そのworktreeで役割設定に従った実装用と検証用の2つのAIセッションを起動し、実装、読み取り専用検証、指摘反映を`implementationLoopCount`回まで繰り返して、検証合格後に実装承認を待ちます。
 
 実装承認時はworktreeの変更をcommitし、ブランチをpushして`baseBranch`向けのPRを作成します。成功するとPR URLを表示してIssueを`state:pr_created`へ更新し、実装用・検証用Codexを停止して最初の`issue`/`pr`選択へ戻ります。失敗時は承認待ちとCodexセッションを維持します。
 
