@@ -111,6 +111,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runConfig(args[1:], os.Stdin, stdout, stderr)
 	case "list":
 		return runList(args[1:], stdout, stderr)
+	case "issue":
+		return runIssue(args[1:], stdout, stderr)
+	case "pr":
+		return runPR(args[1:], stdout, stderr)
 	case "run":
 		return runPrompt(args[1:], stdout, stderr)
 	default:
@@ -1632,10 +1636,14 @@ Usage:
   korocon config set <KEY> <VALUE>
   korocon config allow [COMMAND]
   korocon config allow-path [GLOB]
-  korocon list issue [options]
-  korocon list pr [options]
+  korocon issue list [options]
+  korocon pr list [options]
   korocon doctor [--binary codex]
   korocon version
+
+Compat aliases (旧形式):
+  korocon list issue [options]
+  korocon list pr [options]
 
 Run options:
   --provider NAME       implementer provider (legacy alias)

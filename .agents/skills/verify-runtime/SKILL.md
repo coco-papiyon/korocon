@@ -7,7 +7,7 @@ description: koroconの実行時動作を確認する。実装後のスモーク
 
 ## 目的
 
-実装済みのkoroconを実際に起動し、最低限のCLI動作を確認する。検証対象は`go build`、`korocon list issue`、`korocon config list`とする。
+実装済みのkoroconを実際に起動し、最低限のCLI動作を確認する。検証対象は`go build`、`korocon issue list`、`korocon config list`とする。
 
 ## 前提
 
@@ -34,7 +34,7 @@ go build -o "$build_dir/korocon" ./cmd/korocon
 ビルドした実行ファイルを使い、次を実行する。
 
 ```sh
-"$build_dir/korocon" list issue --dir .
+"$build_dir/korocon" issue list --dir .
 ```
 
 確認項目:
