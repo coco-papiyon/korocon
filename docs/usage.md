@@ -49,9 +49,19 @@ korocon issue list --state all --label backend
 korocon pr list --search 'is:open' --json
 korocon issue set-status 25 design
 korocon issue set-status 25 implementation
+korocon pr set-status 25 review
+korocon pr set-status 25 implementation --dir /path/to/repository
 ```
 
 停止した工程を自動処理対象へ戻す場合は、`korocon issue set-status <NUMBER> design`または`implementation`を実行します。`design`は設計を、`implementation`は実装を次回の`--implementer --auto`で再実行可能な状態へ戻します。工程状態はローカルの`korocon.db`に保存され、GitHubのラベル・本文・コメントは変更しません。closed Issueや、それ以外の状態値は受け付けません。
+
+PRの工程状態は次のコマンドで変更できます。
+
+```text
+korocon pr set-status <NUMBER> <review|implementation> [--dir PATH]
+```
+
+`review`は「レビュー待ち」として次回の`--reviewer --auto`対象へ、`implementation`は「レビュー指摘修正待ち」として次回の`--implementer --auto`対象へ戻します。`--dir`はGitHub CLIの作業ディレクトリと、PR URLが空の場合のローカル状態キーのフォールバックに使われます。GitHub上でOPENかつ非DraftのPRだけが対象で、CLOSED・MERGED・Draft、GitHub CLIエラー、DB保存エラー、不正な番号や状態は成功メッセージを出さずエラーになります。変更対象はローカルの`korocon.db`だけです。
 
 `--state`は`open`（既定）、`closed`、`all`を指定できます。PRは`--state open`の場合、Draftを除外します。`--label`、`--exclude-label`、`--title`、`--author`は複数指定でき、`--json`を指定するとJSON配列を出力します。
 

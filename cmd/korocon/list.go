@@ -18,6 +18,7 @@ import (
 )
 
 var setIssueStatus = issueworkflow.SetStatus
+var setPRStatus = prworkflow.SetStatus
 
 func runIssue(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
@@ -53,9 +54,11 @@ func runPR(args []string, stdout, stderr io.Writer) error {
 	switch verb {
 	case "list":
 		return runPRList(args[1:], "korocon pr list", stdout, stderr)
+	case "set-status":
+		return runPRSetStatus(args[1:], stdout, stderr)
 	default:
 		printPRUsage(stderr)
-		return fmt.Errorf("unknown pr verb %q (use 'list')", args[0])
+		return fmt.Errorf("unknown pr verb %q (use 'list' or 'set-status')", args[0])
 	}
 }
 
@@ -151,6 +154,36 @@ func splitIssueSetStatusArgs(args []string) (flagArgs, positionalArgs []string) 
 		positionalArgs = append(positionalArgs, arg)
 	}
 	return flagArgs, positionalArgs
+}
+
+func runPRSetStatus(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("korocon pr set-status", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dir := fs.String("dir", ".", "working directory")
+	flagArgs, positionalArgs := splitIssueSetStatusArgs(args)
+	if err := fs.Parse(flagArgs); err != nil {
+		return err
+	}
+	if len(positionalArgs) != 2 {
+		return errors.New("Usage: korocon pr set-status <NUMBER> <review|implementation> [--dir PATH]")
+	}
+	number, err := strconv.Atoi(strings.TrimSpace(positionalArgs[0]))
+	if err != nil || number < 1 {
+		return fmt.Errorf("PR番号が不正です: %q", positionalArgs[0])
+	}
+	state, err := setPRStatus(context.Background(), *dir, number, positionalArgs[1])
+	if err != nil {
+		return fmt.Errorf("PR #%dの工程状態を変更できません: %w", number, err)
+	}
+	name := prworkflow.StatusName(state)
+	next := "--reviewer --auto"
+	if strings.EqualFold(strings.TrimSpace(positionalArgs[1]), "implementation") {
+		next = "--implementer --auto"
+	}
+	if _, err := fmt.Fprintf(stdout, "PR #%d の工程状態を変更しました: %s\n次回の %s では%sとして処理されます。\n", number, name, next, name); err != nil {
+		return err
+	}
+	return nil
 }
 
 func runPRList(args []string, cmdName string, stdout, stderr io.Writer) error {
@@ -335,6 +368,7 @@ Options:
 func printPRUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage:
   korocon pr list [options]
+  korocon pr set-status <NUMBER> <review|implementation> [--dir PATH]
 
 Options:
   --state STATE         open, closed, or all (default: open)
@@ -370,10 +404,10 @@ func issueWorkflowDisplayName(state string) string {
 }
 
 var prStateDisplayNames = map[string]string{
-	"":                                         "未レビュー",
-	"state:detected":                           "未レビュー",
+	"":                                         "レビュー待ち",
+	"state:detected":                           "レビュー待ち",
 	"state:pr_created":                         "PR作成済み",
-	"state:pr_review_comment":                  "レビュー修正指示あり",
+	"state:pr_review_comment":                  "レビュー指摘修正待ち",
 	"state:pr_conflict":                        "コンフリクト",
 	"state:pr_conflict_running":                "コンフリクト解消中",
 	"state:pr_conflict_ready":                  "コンフリクト解消完了・承認待ち",
@@ -396,6 +430,9 @@ var prStateDisplayNames = map[string]string{
 }
 
 func prWorkflowDisplayName(state string) string {
+	if name := prworkflow.StatusName(state); name != strings.TrimSpace(state) || strings.TrimSpace(state) == "" {
+		return name
+	}
 	if name, ok := prStateDisplayNames[strings.ToLower(strings.TrimSpace(state))]; ok {
 		return name
 	}
