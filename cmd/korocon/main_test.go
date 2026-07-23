@@ -191,7 +191,18 @@ func TestGitHubInformationSelectionAcceptsCaseInsensitiveShortcutsAndDefaultsToI
 }
 
 func TestPullRequestStatusUsesJapaneseStateLabel(t *testing.T) {
-	status := pullRequestStatus(prworkflow.PullRequest{State: "OPEN", Labels: []prworkflow.Label{{Name: "state:review_approved"}}})
+	oldState := prWorkflowState
+	t.Cleanup(func() { prWorkflowState = oldState })
+	prWorkflowState = func(pr prworkflow.PullRequest, _ string) (string, error) {
+		for _, label := range pr.Labels {
+			return label.Name, nil
+		}
+		return "", nil
+	}
+	status, err := pullRequestStatus(prworkflow.PullRequest{State: "OPEN", Labels: []prworkflow.Label{{Name: "state:review_approved"}}}, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if status != "レビュー承認済み" {
 		t.Fatalf("status = %q", status)
 	}

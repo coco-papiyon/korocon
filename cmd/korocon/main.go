@@ -951,7 +951,11 @@ func selectIssueForRole(ctx context.Context, reader *bufio.Reader, out io.Writer
 		return nil, err
 	}
 	for _, issue := range issues {
-		if _, err := fmt.Fprintf(table, "%d\t%s\t%s\n", issue.Number, issueStatus(issue), tableCell(issue.Title)); err != nil {
+		status, err := issueStatus(issue, workingDir)
+		if err != nil {
+			return nil, fmt.Errorf("Issue #%dの工程状態の取得に失敗しました: %w", issue.Number, err)
+		}
+		if _, err := fmt.Fprintf(table, "%d\t%s\t%s\n", issue.Number, status, tableCell(issue.Title)); err != nil {
 			return nil, err
 		}
 	}
@@ -1027,23 +1031,12 @@ func issueIsRunningInDir(issue issueworkflow.Issue, workingDir string) bool {
 	}
 }
 
-func issueStatus(issue issueworkflow.Issue) string {
-	for _, label := range issue.Labels {
-		name := strings.ToLower(strings.TrimSpace(label.Name))
-		if status, ok := map[string]string{
-			"state:design_approved":        "実装待ち",
-			"state:implementation_running": "実装中",
-			"state:implementation_ready":   "実装完了・承認待ち",
-			"state:design_failed":          "設計失敗・再実行待ち",
-			"state:implementation_failed":  "実装失敗・再実行待ち",
-			"state:failed":                 "失敗・再実行待ち",
-			"state:review_fix":             "レビュー修正",
-			"state:pr_review_comment":      "PRレビュー指摘あり",
-		}[name]; ok {
-			return status
-		}
+func issueStatus(issue issueworkflow.Issue, workingDir string) (string, error) {
+	state, err := issueWorkflowState(issue, workingDir)
+	if err != nil {
+		return "", err
 	}
-	return "設計"
+	return issueWorkflowDisplayName(state), nil
 }
 
 func issuePhaseName(phase issueworkflow.Phase) string {
@@ -1285,7 +1278,10 @@ func selectPullRequestForRole(ctx context.Context, reader *bufio.Reader, out io.
 		return nil, err
 	}
 	for _, pr := range prs {
-		status := pullRequestStatus(pr)
+		status, err := pullRequestStatus(pr, workingDir)
+		if err != nil {
+			return nil, fmt.Errorf("PR #%dの工程状態の取得に失敗しました: %w", pr.Number, err)
+		}
 		if _, err := fmt.Fprintf(table, "%d\t%s\t%s\n", pr.Number, status, tableCell(pr.Title)); err != nil {
 			return nil, err
 		}
@@ -1424,58 +1420,15 @@ func pullRequestUsesReviewerWorktree(phase prworkflow.Phase) bool {
 	}
 }
 
-var pullRequestStateNames = map[string]string{
-	"state:detected":                           "検出済み",
-	"state:design_running":                     "設計実行中",
-	"state:design_ready":                       "設計完了・承認待ち",
-	"state:design_approved":                    "設計承認済み",
-	"state:implementation_running":             "実装中",
-	"state:implementation_ready":               "実装完了・承認待ち",
-	"state:implementation_approved":            "実装承認済み",
-	"state:pr_created":                         "PR作成済み",
-	"state:pr_review_comment":                  "レビュー修正指示あり",
-	"state:pr_conflict":                        "コンフリクトあり",
-	"state:pr_conflict_running":                "コンフリクト解消中",
-	"state:pr_conflict_ready":                  "コンフリクト解消完了・承認待ち",
-	"state:pr_conflict_resolved":               "コンフリクト解消済み",
-	"state:review_fix_design_running":          "レビュー修正設計中",
-	"state:review_fix_design_ready":            "レビュー修正設計完了・承認待ち",
-	"state:review_fix_design_approved":         "レビュー修正設計承認済み",
-	"state:review_fix_implementation_running":  "レビュー修正実装中",
-	"state:review_fix_implementation_ready":    "レビュー修正実装完了・承認待ち",
-	"state:review_fix_implementation_approved": "レビュー修正実装承認済み",
-	"state:review_fixed":                       "レビュー修正済み",
-	"state:review_running":                     "レビュー中",
-	"state:review_ready":                       "レビュー完了・承認待ち",
-	"state:review_approved":                    "レビュー承認済み",
-	"state:review_failed":                      "レビュー失敗・再実行待ち",
-	"state:review_fix_failed":                  "レビュー修正失敗・再実行待ち",
-	"state:pr_conflict_failed":                 "コンフリクト解消失敗・再実行待ち",
-	"state:completed":                          "完了",
-	"state:failed":                             "失敗",
-}
-
-func pullRequestStatus(pr prworkflow.PullRequest) string {
+func pullRequestStatus(pr prworkflow.PullRequest, workingDir string) (string, error) {
 	if prworkflow.HasConflict(pr) {
-		return "コンフリクト"
+		return "コンフリクト", nil
 	}
-	for _, label := range pr.Labels {
-		name := strings.ToLower(strings.TrimSpace(label.Name))
-		if status, ok := pullRequestStateNames[name]; ok {
-			return status
-		}
-		if strings.HasPrefix(name, "state:") {
-			return strings.TrimPrefix(name, "state:")
-		}
+	state, err := prWorkflowState(pr, workingDir)
+	if err != nil {
+		return "", err
 	}
-	switch strings.ToUpper(strings.TrimSpace(pr.State)) {
-	case "OPEN":
-		return "未レビュー"
-	case "CLOSED":
-		return "クローズ"
-	default:
-		return strings.ToUpper(strings.TrimSpace(pr.State))
-	}
+	return prWorkflowDisplayName(state), nil
 }
 
 func tableCell(value string) string {
