@@ -5,6 +5,22 @@ import (
 	"testing"
 )
 
+func TestIsGoRunExecutable(t *testing.T) {
+	for _, test := range []struct {
+		path string
+		want bool
+	}{
+		{path: "/tmp/go-build123/exe/korocon", want: true},
+		{path: "/tmp/go-build123/exe/workflowstate.test", want: false},
+		{path: "/tmp/go-build123/korocon", want: false},
+		{path: "/usr/local/bin/korocon", want: false},
+	} {
+		if got := isGoRunExecutable(test.path); got != test.want {
+			t.Fatalf("isGoRunExecutable(%q) = %t, want %t", test.path, got, test.want)
+		}
+	}
+}
+
 func TestSetAndGet(t *testing.T) {
 	previous := resolvePath
 	databasePath := filepath.Join(t.TempDir(), "korocon.db")

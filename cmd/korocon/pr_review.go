@@ -166,7 +166,7 @@ func (c *prReviewController) OnJobFinish(ctx context.Context, id uint64, prompt 
 		if err != nil {
 			return err
 		}
-		_, err = fmt.Fprintf(c.out, "動作確認結果を保存しました: %s\n動作確認が完了しました。結果を確認し、問題がなければPRをクローズして未入力状態でEnterまたは/checkを入力してください。\n", artifact)
+		_, err = fmt.Fprintf(c.out, "動作確認結果を保存しました: %s\n動作確認が完了しました。\n動作確認後にPRをクローズし、未入力状態でEnterまたは/checkを入力してください。\n", artifact)
 		return err
 	}
 	artifact := ""
@@ -360,7 +360,7 @@ func (c *prReviewController) HandleInput(ctx context.Context, input string) (dae
 			if verification != "" {
 				message += "\n動作確認コマンドを起動しました: " + verification
 			}
-			_, err := fmt.Fprintf(c.out, "%s\n動作確認後にPRをクローズし、未入力状態でEnterまたは/checkを入力してください。\n", message)
+			_, err := fmt.Fprintln(c.out, message)
 			return daemon.InputAction{Handled: true, Prompt: verificationPrompt}, err
 		}
 		instruction := trimmed

@@ -32,7 +32,22 @@ func Path() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve korocon executable path: %w", err)
 	}
+	// `go run` creates a new executable below a temporary go-build directory
+	// for every invocation. Use the current working directory in that case so
+	// an approval and a subsequent list command share the same state database.
+	if isGoRunExecutable(executable) {
+		workingDir, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("resolve current working directory: %w", err)
+		}
+		return filepath.Join(workingDir, databaseName), nil
+	}
 	return filepath.Join(filepath.Dir(executable), databaseName), nil
+}
+
+func isGoRunExecutable(executable string) bool {
+	path := filepath.ToSlash(filepath.Clean(executable))
+	return !strings.HasSuffix(path, ".test") && strings.Contains(path, "/go-build") && strings.HasSuffix(filepath.ToSlash(filepath.Dir(path)), "/exe")
 }
 
 // Get returns the stored state for key. found is false when no state exists.

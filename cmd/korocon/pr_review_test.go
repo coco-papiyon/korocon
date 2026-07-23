@@ -346,6 +346,9 @@ func TestPRReviewApprovalStartsAIVerificationWithoutStartupCommand(t *testing.T)
 	if !strings.Contains(out.String(), "AIにworktreeでの動作確認を指示します") || strings.Contains(out.String(), "動作確認コマンドを起動しました") {
 		t.Fatalf("output = %q", out.String())
 	}
+	if strings.Contains(out.String(), "動作確認後にPRをクローズし") {
+		t.Fatalf("close instruction was shown before verification completed: %q", out.String())
+	}
 }
 
 func TestPRReviewVerificationSavesResultAndDisplaysCompletion(t *testing.T) {
@@ -366,7 +369,7 @@ func TestPRReviewVerificationSavesResultAndDisplaysCompletion(t *testing.T) {
 	if err := controller.OnJobFinish(context.Background(), 2, action.Prompt, verification, nil); err != nil {
 		t.Fatal(err)
 	}
-	if workflow.verification != verification || !strings.Contains(out.String(), "動作確認結果を保存しました: .workspace/verification/4_pr.md") || !strings.Contains(out.String(), "動作確認が完了しました") {
+	if workflow.verification != verification || !strings.Contains(out.String(), "動作確認結果を保存しました: .workspace/verification/4_pr.md") || !strings.Contains(out.String(), "動作確認が完了しました") || !strings.Contains(out.String(), "動作確認後にPRをクローズし、未入力状態でEnterまたは/checkを入力してください。") {
 		t.Fatalf("verification=%q output=%q", workflow.verification, out.String())
 	}
 }
