@@ -90,6 +90,8 @@ go run ./cmd/korocon -r --auto
 
 `--assignee <ユーザー名>`でIssue/PRの担当者を指定できます。省略時は`gh api user --jq .login`の現在ユーザーを使用し、空白指定時は担当者フィルタを無効にします。
 
+ジョブ開始前の未コミット変更の扱いは、`-s stash`（`--sync-dirty stash`）で今回の実行だけ`stash`へ変更できます。`fail`は既定値です。この指定は設定ファイルを変更しません。
+
 追加フィルタとして、`--label`、`--exclude-label`、`--title`、`--author`、`--search`を使用できます。ラベル、除外ラベル、タイトル、作成者は複数回指定できます。GitHub Projects v2で絞り込む場合は、`--project <番号>`、`--project-owner <owner>`、`--project-status <Status>`を指定します。Status以外のProjectフィールドには`--project-query`を使用できます。
 
 ```sh

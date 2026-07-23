@@ -160,8 +160,23 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 	projectStatus := fs.String("project-status", "", "GitHub Projects v2 Status value")
 	projectQuery := fs.String("project-query", "", "GitHub Projects v2 filter query")
 	autoMode := fs.Bool("auto", false, "process matching targets sequentially")
+	var syncDirtyWorktree string
+	fs.StringVar(&syncDirtyWorktree, "sync-dirty", "", "override dirty worktree policy: fail or stash")
+	fs.StringVar(&syncDirtyWorktree, "s", "", "shorthand for --sync-dirty")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	syncDirtySpecified := false
+	fs.Visit(func(selected *flag.Flag) {
+		if selected.Name == "sync-dirty" || selected.Name == "s" {
+			syncDirtySpecified = true
+		}
+	})
+	if syncDirtySpecified {
+		configured, err = overrideSyncDirtyWorktree(configured, syncDirtyWorktree)
+		if err != nil {
+			return err
+		}
 	}
 	issueSpecified, prSpecified := false, false
 	fs.Visit(func(selected *flag.Flag) {
@@ -1561,6 +1576,14 @@ func runPrompt(args []string, stdout, stderr io.Writer) error {
 	})
 }
 
+func overrideSyncDirtyWorktree(configured appconfig.Config, value string) (appconfig.Config, error) {
+	updated, err := appconfig.SetValue(configured, "syncDirtyWorktree", value)
+	if err != nil {
+		return configured, fmt.Errorf("--sync-dirty: %w", err)
+	}
+	return updated, nil
+}
+
 func doctor(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -1614,6 +1637,7 @@ Run options:
   --reviewer            select only unreviewed pull requests for the reviewer
   -r                    shorthand for --reviewer
   --assignee USER       filter by assignee; omitted uses gh api user, blank disables filtering
+  -s, --sync-dirty MODE override dirty worktree policy for this run: fail or stash
   --label NAME          require a label; repeat to require all labels
   --exclude-label NAME  exclude a label; repeatable
   --title TEXT          require a title substring; repeated values use OR

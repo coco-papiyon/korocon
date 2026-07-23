@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	appconfig "github.com/coco-papiyon/korocon/internal/config"
 	issueworkflow "github.com/coco-papiyon/korocon/internal/issue"
 	prworkflow "github.com/coco-papiyon/korocon/internal/pullrequest"
 )
@@ -423,6 +424,22 @@ func TestRunInteractiveRejectsShortRoleModesTogether(t *testing.T) {
 	err := runInteractive([]string{"-i", "-r"}, strings.NewReader(""), io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "cannot be specified together") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestOverrideSyncDirtyWorktree(t *testing.T) {
+	configured := appconfig.Default()
+	configured.SyncDirtyWorktree = "fail"
+
+	updated, err := overrideSyncDirtyWorktree(configured, "stash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.SyncDirtyWorktree != "stash" || configured.SyncDirtyWorktree != "fail" {
+		t.Fatalf("updated=%q configured=%q", updated.SyncDirtyWorktree, configured.SyncDirtyWorktree)
+	}
+	if _, err := overrideSyncDirtyWorktree(configured, "skip"); err == nil || !strings.Contains(err.Error(), "--sync-dirty") {
+		t.Fatalf("invalid override error = %v", err)
 	}
 }
 

@@ -170,6 +170,8 @@ korocon -r --auto --project 3 --project-status "Ready"
 
 `--assignee <ユーザー名>`でIssueとPRの担当者を指定できます。省略時は`gh api user --jq .login`で取得した現在のGitHubユーザーを使用します。`--assignee ""`のように空白を指定した場合は担当者フィルタを無効にします。
 
+ジョブ開始前の未コミット変更の扱いは、`-s <fail|stash>`または`--sync-dirty <fail|stash>`で今回の実行だけ上書きできます。`fail`（既定）は同期を停止し、`stash`は変更と未追跡ファイルを一時退避して同期後に復元します。この指定は設定ファイルへ保存されません。
+
 次の追加フィルタを指定できます。
 
 | 引数 | 処理 |
