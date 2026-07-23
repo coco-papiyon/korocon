@@ -59,26 +59,6 @@ func runPR(args []string, stdout, stderr io.Writer) error {
 	}
 }
 
-func runList(args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 {
-		printListUsage(stdout)
-		return errors.New("list subcommand is required: issue or pr")
-	}
-	if args[0] == "--help" || args[0] == "help" {
-		printListUsage(stdout)
-		return nil
-	}
-	kind := strings.ToLower(strings.TrimSpace(args[0]))
-	switch kind {
-	case "issue":
-		return runIssueList(args[1:], "korocon list issue", stdout, stderr)
-	case "pr":
-		return runPRList(args[1:], "korocon list pr", stdout, stderr)
-	default:
-		return fmt.Errorf("unknown list target %q (use 'issue' or 'pr')", args[0])
-	}
-}
-
 // issueWorkflowState resolves the persisted workflow state for an issue
 // without modifying stored workflow state. It is overridable for testing.
 var issueWorkflowState = issueworkflow.DisplayStateForIssue
@@ -355,24 +335,6 @@ Options:
 func printPRUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage:
   korocon pr list [options]
-
-Options:
-  --state STATE         open, closed, or all (default: open)
-  --dir PATH            working directory (default: .)
-  --search QUERY        GitHub advanced search query
-  --label NAME          require a label; repeatable
-  --exclude-label NAME  exclude a label; repeatable
-  --title TEXT          require a title substring; repeatable (OR)
-  --author USER         filter by author; repeatable (OR)
-  --json                output JSON instead of a table`)
-}
-
-func printListUsage(w io.Writer) {
-	fmt.Fprintln(w, `Usage (互換別名):
-  korocon list issue [options]
-  korocon list pr [options]
-
-正式形は 'korocon issue list' および 'korocon pr list' を使用してください。
 
 Options:
   --state STATE         open, closed, or all (default: open)
