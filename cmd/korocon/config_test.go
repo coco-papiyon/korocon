@@ -66,6 +66,7 @@ func TestPrintConfigList(t *testing.T) {
 		"implementerProvider: copilot",
 		"implementerModel: auto",
 		"runtimeVerificationEnabled: true",
+		"syncDirtyWorktree: fail",
 		"  - go test ./...",
 		"  - git status",
 		"builtinAllowedPaths:",

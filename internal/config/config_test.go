@@ -27,6 +27,9 @@ func TestLoadFileUsesDefaultWhenMissing(t *testing.T) {
 	if configured.AutoPollingInterval != "5m" {
 		t.Fatalf("autoPollingInterval = %q", configured.AutoPollingInterval)
 	}
+	if configured.SyncDirtyWorktree != "fail" {
+		t.Fatalf("syncDirtyWorktree = %q", configured.SyncDirtyWorktree)
+	}
 	if !configured.RuntimeVerificationEnabled {
 		t.Fatal("runtimeVerificationEnabled = false, want true")
 	}
@@ -74,6 +77,7 @@ func TestSetValueUpdatesScalarSettings(t *testing.T) {
 		check func(Config) bool
 	}{
 		{"autoPollingInterval", "30s", func(c Config) bool { return c.AutoPollingInterval == "30s" }},
+		{"syncDirtyWorktree", "stash", func(c Config) bool { return c.SyncDirtyWorktree == "stash" }},
 		{"implementationLoopCount", "5", func(c Config) bool { return c.ImplementationLoopCount == 5 }},
 		{"runtimeVerificationEnabled", "false", func(c Config) bool { return !c.RuntimeVerificationEnabled }},
 		{"vscodeNotificationEnabled", "false", func(c Config) bool { return !c.VSCodeNotificationEnabled }},
@@ -95,6 +99,7 @@ func TestSetValueRejectsInvalidValues(t *testing.T) {
 	}{
 		{"autoPollingInterval", "0s"},
 		{"autoPollingInterval", "not-duration"},
+		{"syncDirtyWorktree", "skip"},
 		{"implementationLoopCount", "11"},
 		{"runtimeVerificationEnabled", "enabled"},
 		{"workspaceName", "../outside"},
@@ -103,6 +108,30 @@ func TestSetValueRejectsInvalidValues(t *testing.T) {
 		if _, err := SetValue(Default(), test.key, test.value); err == nil {
 			t.Fatalf("SetValue(%q, %q) accepted invalid value", test.key, test.value)
 		}
+	}
+}
+
+func TestLoadFileReadsSyncDirtyWorktree(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, []byte(`{"syncDirtyWorktree":"stash"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configured, err := loadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured.SyncDirtyWorktree != "stash" {
+		t.Fatalf("syncDirtyWorktree = %q", configured.SyncDirtyWorktree)
+	}
+}
+
+func TestLoadFileRejectsInvalidSyncDirtyWorktree(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, []byte(`{"syncDirtyWorktree":"skip"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadFile(path); err == nil || !strings.Contains(err.Error(), "syncDirtyWorktree") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

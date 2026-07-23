@@ -86,14 +86,14 @@ type commandRunner interface {
 
 type ghCommandRunner struct{}
 
-var runGitSyncCommand = func(ctx context.Context, dir string, args ...string) error {
+var runGitSyncCommand = func(ctx context.Context, dir string, args ...string) (string, error) {
 	command := append([]string{"-C", dir}, args...)
 	cmd := exec.CommandContext(ctx, "git", command...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
-	return nil
+	return string(out), nil
 }
 
 func (ghCommandRunner) Run(ctx context.Context, dir string, args ...string) ([]byte, error) {
@@ -259,12 +259,54 @@ func (w *Workflow) SetImplementationPublisher(publisher func(context.Context, st
 	w.publishImplementation = publisher
 }
 
-func SyncRepository(ctx context.Context, dir string) error {
-	if err := runGitSyncCommand(ctx, dir, "fetch", "--prune", "origin"); err != nil {
-		return fmt.Errorf("fetch repository: %w", err)
+// SyncRepository updates the repository before a job starts. When dirtyWorktree
+// is "stash", it temporarily stashes tracked and untracked changes and restores
+// them after the update. A failed restore leaves the stash available for recovery.
+func SyncRepository(ctx context.Context, dir, dirtyWorktree string) error {
+	status, err := runGitSyncCommand(ctx, dir, "status", "--porcelain")
+	if err != nil {
+		return fmt.Errorf("inspect repository status: %w", err)
 	}
-	if err := runGitSyncCommand(ctx, dir, "pull", "--ff-only"); err != nil {
-		return fmt.Errorf("pull repository: %w", err)
+	dirty := strings.TrimSpace(status) != ""
+	policy := strings.ToLower(strings.TrimSpace(dirtyWorktree))
+	if policy == "" {
+		policy = "fail"
+	}
+	if policy != "fail" && policy != "stash" {
+		return fmt.Errorf("unsupported dirty worktree policy %q", dirtyWorktree)
+	}
+	if dirty && policy == "fail" {
+		return errors.New("repository has uncommitted changes; commit or stash them, or set syncDirtyWorktree to \"stash\"")
+	}
+
+	stashed := false
+	if dirty {
+		if _, err := runGitSyncCommand(ctx, dir, "stash", "push", "--include-untracked", "--message", "korocon: pre-job sync"); err != nil {
+			return fmt.Errorf("stash repository changes: %w", err)
+		}
+		stashed = true
+	}
+	restore := func(syncErr error) error {
+		if !stashed {
+			return syncErr
+		}
+		if _, err := runGitSyncCommand(ctx, dir, "stash", "pop"); err != nil {
+			return fmt.Errorf("%w; restore stashed changes: %v; the stash was kept for manual recovery", syncErr, err)
+		}
+		return syncErr
+	}
+
+	if _, err := runGitSyncCommand(ctx, dir, "fetch", "--prune", "origin"); err != nil {
+		return restore(fmt.Errorf("fetch repository: %w", err))
+	}
+	if _, err := runGitSyncCommand(ctx, dir, "pull", "--no-rebase"); err != nil {
+		return restore(fmt.Errorf("pull repository: %w", err))
+	}
+	if !stashed {
+		return nil
+	}
+	if _, err := runGitSyncCommand(ctx, dir, "stash", "pop"); err != nil {
+		return fmt.Errorf("restore stashed changes after repository sync: %w; the stash was kept for manual recovery", err)
 	}
 	return nil
 }

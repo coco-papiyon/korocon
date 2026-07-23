@@ -73,7 +73,7 @@ Copilotの自動承認パスは`korocon config allow-path "~/.copilot/session-st
 
 ## ジョブ投入
 
-すべてのジョブは、AIへ投入する前に対象リポジトリで`git fetch --prune origin`と`git pull --ff-only`を実行します。同期に失敗したジョブはAIを開始せず失敗として表示します。
+すべてのジョブは、AIへ投入する前に対象リポジトリで`git fetch --prune origin`と`git pull --no-rebase`を実行します。未コミット変更がある場合は既定で同期を停止します。`syncDirtyWorktree`を`stash`に設定すると、変更と未追跡ファイルを一時stashして同期後に復元します。復元競合時はAIを開始せず、stashを残します。
 
 起動時にIssueを選択した場合は、取得したIssueが最初のジョブとして自動投入されます。`state:design_approved`がなければ設計、あれば実装です。設計・実装の具体的な方法はリポジトリのスキルへ委ねられます。
 

@@ -458,7 +458,7 @@ func runInteractive(args []string, in io.Reader, stdout, stderr io.Writer) error
 				return nil
 			}
 			cfg.BeforeJob = func(ctx context.Context, _ uint64, _ string) error {
-				if err := issueworkflow.SyncRepository(ctx, *dir); err != nil {
+				if err := issueworkflow.SyncRepository(ctx, *dir, configured.SyncDirtyWorktree); err != nil {
 					return err
 				}
 				if selectedPR != nil && pullRequestUsesReviewerWorktree(selectedPR.Phase) {

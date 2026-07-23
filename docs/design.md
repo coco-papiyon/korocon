@@ -167,7 +167,7 @@ Issue実装・検証用Copilotセッションは、確定した実装worktreeを
 3. ProviderのJSONプロトコルで`initialize`を送信する
 4. Codexは`thread/start`、Copilotは`session/new`を実行する
 5. Issueが選択されていれば、状態を判定して初期ジョブをキューへ追加する
-6. ジョブ開始前に`git fetch --prune origin`と`git pull --ff-only`を実行する
+6. ジョブ開始前に`git fetch --prune origin`と`git pull --no-rebase`を実行する。未コミット変更は既定で停止し、`syncDirtyWorktree: stash`の場合だけ一時stashして復元する。復元競合時はジョブを開始せずstashを残す
 7. GitHubの状態ラベルをrunningへ更新する
 8. 状態ラベル更新に成功したジョブについて、Issue番号と工程の開始メッセージおよび`---`を表示する
 9. workerがProviderのターン開始要求を標準入力へ送り、Copilotの初回ターンでは先に`/ide`を送る

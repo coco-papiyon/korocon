@@ -23,6 +23,7 @@ type Config struct {
 	ImplementationDirectory    string   `json:"implementationDirectory"`
 	ImplementationLoopCount    int      `json:"implementationLoopCount"`
 	AutoPollingInterval        string   `json:"autoPollingInterval"`
+	SyncDirtyWorktree          string   `json:"syncDirtyWorktree"`
 	BaseBranch                 string   `json:"baseBranch"`
 	RuntimeVerificationEnabled bool     `json:"runtimeVerificationEnabled"`
 	VSCodeNotificationEnabled  bool     `json:"vscodeNotificationEnabled"`
@@ -59,7 +60,7 @@ func Default() Config {
 	return Config{
 		WorkspaceName: ".workspace", BranchNamePattern: "issue_#{{ issue_number }}",
 		ImplementationDirectory: defaultImplementationDirectory, ImplementationLoopCount: 3,
-		AutoPollingInterval: "5m", BaseBranch: "main", RuntimeVerificationEnabled: true, VSCodeNotificationEnabled: true,
+		AutoPollingInterval: "5m", SyncDirtyWorktree: "fail", BaseBranch: "main", RuntimeVerificationEnabled: true, VSCodeNotificationEnabled: true,
 		BuiltinAllowedCommands: DefaultAllowedCommands(),
 		BuiltinAllowedPaths:    DefaultAllowedPaths(),
 		ImplementerProvider:    "codex", ImplementerModel: "gpt-5.6-luna",
@@ -159,6 +160,12 @@ func SetValue(configured Config, key, value string) (Config, error) {
 			return configured, fmt.Errorf("config %s: must be a positive duration: %q", key, value)
 		}
 		configured.AutoPollingInterval = value
+	case "syncDirtyWorktree":
+		policy, err := normalizeSyncDirtyWorktree(value)
+		if err != nil {
+			return configured, fmt.Errorf("config %s: %w", key, err)
+		}
+		configured.SyncDirtyWorktree = policy
 	case "baseBranch":
 		if value == "" {
 			return configured, fmt.Errorf("config %s: must not be empty", key)
@@ -268,6 +275,10 @@ func loadFile(path string) (Config, error) {
 	if err != nil || interval <= 0 {
 		return Config{}, fmt.Errorf("config autoPollingInterval: must be a positive duration: %q", configured.AutoPollingInterval)
 	}
+	configured.SyncDirtyWorktree, err = normalizeSyncDirtyWorktree(configured.SyncDirtyWorktree)
+	if err != nil {
+		return Config{}, fmt.Errorf("config syncDirtyWorktree: %w", err)
+	}
 	configured.BaseBranch = strings.TrimSpace(configured.BaseBranch)
 	if configured.BaseBranch == "" {
 		configured.BaseBranch = "main"
@@ -307,6 +318,17 @@ func loadFile(path string) (Config, error) {
 	}
 	configured.Reviewer = strings.TrimSpace(configured.Reviewer)
 	return configured, nil
+}
+
+func normalizeSyncDirtyWorktree(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "fail":
+		return "fail", nil
+	case "stash":
+		return "stash", nil
+	default:
+		return "", fmt.Errorf("must be fail or stash: %q", value)
+	}
 }
 
 func modelDefaultForProvider(provider string) string {

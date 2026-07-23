@@ -28,6 +28,7 @@ korocon config init
 korocon config init --force  # 既存config.jsonを再初期化
 korocon config model         # モデル設定だけを変更
 korocon config set autoPollingInterval 10m
+korocon config set syncDirtyWorktree stash
 korocon config set implementationLoopCount 5
 korocon config allow "go test ./..."
 korocon config allow-path "~/.copilot/session-state/*/plan.md"
@@ -35,7 +36,7 @@ korocon config allow-path "~/.copilot/session-state/*/plan.md"
 
 `korocon config allow [COMMAND]`は`builtinAllowedCommands`へコマンドを追加します。`korocon config allow-path [GLOB]`は`builtinAllowedPaths`へCopilotの自動承認対象パスを追加します。引数を省略した場合は対話入力になります。
 
-`korocon config set <KEY> <VALUE>`は設定ファイルの単一値を変更します。`autoPollingInterval`は`5m`や`30s`などの正のduration、`implementationLoopCount`は1〜10を指定します。Providerには`codex`、`copilot`、検証者・レビューアには`inherit`を指定できます。配列設定は`config allow`または`config allow-path`を使用してください。
+`korocon config set <KEY> <VALUE>`は設定ファイルの単一値を変更します。`autoPollingInterval`は`5m`や`30s`などの正のduration、`implementationLoopCount`は1〜10を指定します。`syncDirtyWorktree`は`fail`（既定）または`stash`を指定できます。`stash`では未コミット変更と未追跡ファイルを一時退避して同期後に復元します。復元が競合した場合はジョブを開始せず、stashを残します。Providerには`codex`、`copilot`、検証者・レビューアには`inherit`を指定できます。配列設定は`config allow`または`config allow-path`を使用してください。
 
 ### Issue/PR一覧
 
@@ -63,6 +64,7 @@ tools/
   "implementationDirectory": "../branches-{{ repository_name }}/",
   "implementationLoopCount": 3,
   "autoPollingInterval": "5m",
+  "syncDirtyWorktree": "fail",
   "baseBranch": "main",
   "runtimeVerificationEnabled": true,
   "implementerProvider": "codex",
@@ -86,6 +88,7 @@ tools/
 | `implementationDirectory` | `../branches-{{ repository_name }}/` | 実装worktreeを置く親ディレクトリ。設定値はテンプレートとして展開されます。 |
 | `implementationLoopCount` | `3` | Issue実装およびPRレビュー指摘修正の実装・検証の最大試行回数。最大10回です。 |
 | `autoPollingInterval` | `5m` | `--auto`で対象がない場合に再取得するまでの待機期間です。`30s`、`5m`、`1h`などの正の期間を指定します。 |
+| `syncDirtyWorktree` | `fail` | ジョブ開始前の同期時に未コミット変更がある場合の扱いです。`fail`は同期を停止し、`stash`は変更を一時stashして同期・復元します。復元競合時はジョブを開始せずstashを残します。 |
 | `baseBranch` | `main` | 実装承認時に作成するPRのbaseブランチです。 |
 | `runtimeVerificationEnabled` | `true` | レビュー承認後にレビューアへPR head worktreeでの動作確認を指示するか指定します。 |
 | `vscodeNotificationEnabled` | `true` | VS Code統合ターミナルで、ジョブ完了・承認待ち・ユーザー入力待ちを通知するか指定します。 |
@@ -141,7 +144,7 @@ AIの回答
 
 ```sh
 git fetch --prune origin
-git pull --ff-only
+git pull --no-rebase
 ```
 
 fetchまたはfast-forward pullに失敗した場合は、そのAIジョブを開始せず`[job N] 失敗`を表示します。自動mergeやrebaseは行いません。競合、未追跡ブランチ、認証・ネットワークエラーなどの原因を解消してからジョブを再投入してください。

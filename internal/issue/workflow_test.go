@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -169,19 +170,19 @@ func TestRevisionPromptIncludesFeedbackAndIssue(t *testing.T) {
 func TestSyncRepositoryFetchesAndPulls(t *testing.T) {
 	oldRun := runGitSyncCommand
 	var calls [][]string
-	runGitSyncCommand = func(_ context.Context, dir string, args ...string) error {
+	runGitSyncCommand = func(_ context.Context, dir string, args ...string) (string, error) {
 		if dir != "/repo" {
 			t.Fatalf("dir = %q", dir)
 		}
 		calls = append(calls, append([]string(nil), args...))
-		return nil
+		return "", nil
 	}
 	defer func() { runGitSyncCommand = oldRun }()
 
-	if err := SyncRepository(context.Background(), "/repo"); err != nil {
+	if err := SyncRepository(context.Background(), "/repo", "fail"); err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) != 2 || strings.Join(calls[0], " ") != "fetch --prune origin" || strings.Join(calls[1], " ") != "pull --ff-only" {
+	if len(calls) != 3 || strings.Join(calls[0], " ") != "status --porcelain" || strings.Join(calls[1], " ") != "fetch --prune origin" || strings.Join(calls[2], " ") != "pull --no-rebase" {
 		t.Fatalf("calls = %v", calls)
 	}
 }
@@ -189,17 +190,89 @@ func TestSyncRepositoryFetchesAndPulls(t *testing.T) {
 func TestSyncRepositoryStopsWhenFetchFails(t *testing.T) {
 	oldRun := runGitSyncCommand
 	calls := 0
-	runGitSyncCommand = func(_ context.Context, _ string, _ ...string) error {
+	runGitSyncCommand = func(_ context.Context, _ string, args ...string) (string, error) {
 		calls++
-		return errors.New("network unavailable")
+		if strings.Join(args, " ") == "fetch --prune origin" {
+			return "", errors.New("network unavailable")
+		}
+		return "", nil
 	}
 	defer func() { runGitSyncCommand = oldRun }()
 
-	if err := SyncRepository(context.Background(), "/repo"); err == nil || !strings.Contains(err.Error(), "fetch repository") {
+	if err := SyncRepository(context.Background(), "/repo", "fail"); err == nil || !strings.Contains(err.Error(), "fetch repository") {
 		t.Fatalf("SyncRepository() error = %v", err)
 	}
-	if calls != 1 {
+	if calls != 2 {
 		t.Fatalf("calls = %d", calls)
+	}
+}
+
+func TestSyncRepositoryStashesDirtyWorktreeAndRestoresIt(t *testing.T) {
+	oldRun := runGitSyncCommand
+	var calls [][]string
+	runGitSyncCommand = func(_ context.Context, _ string, args ...string) (string, error) {
+		calls = append(calls, append([]string(nil), args...))
+		if strings.Join(args, " ") == "status --porcelain" {
+			return " M implementer.sh\n?? generated.txt\n", nil
+		}
+		return "", nil
+	}
+	defer func() { runGitSyncCommand = oldRun }()
+
+	if err := SyncRepository(context.Background(), "/repo", "stash"); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, len(calls))
+	for i, call := range calls {
+		got[i] = strings.Join(call, " ")
+	}
+	want := []string{
+		"status --porcelain",
+		"stash push --include-untracked --message korocon: pre-job sync",
+		"fetch --prune origin",
+		"pull --no-rebase",
+		"stash pop",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %v, want %v", got, want)
+	}
+}
+
+func TestSyncRepositoryRejectsDirtyWorktreeByDefault(t *testing.T) {
+	oldRun := runGitSyncCommand
+	var calls [][]string
+	runGitSyncCommand = func(_ context.Context, _ string, args ...string) (string, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return " M implementer.sh\n", nil
+	}
+	defer func() { runGitSyncCommand = oldRun }()
+
+	err := SyncRepository(context.Background(), "/repo", "")
+	if err == nil || !strings.Contains(err.Error(), "syncDirtyWorktree") {
+		t.Fatalf("SyncRepository() error = %v", err)
+	}
+	if len(calls) != 1 || strings.Join(calls[0], " ") != "status --porcelain" {
+		t.Fatalf("calls = %v", calls)
+	}
+}
+
+func TestSyncRepositoryKeepsStashWhenRestoreFails(t *testing.T) {
+	oldRun := runGitSyncCommand
+	runGitSyncCommand = func(_ context.Context, _ string, args ...string) (string, error) {
+		switch strings.Join(args, " ") {
+		case "status --porcelain":
+			return " M implementer.sh\n", nil
+		case "stash pop":
+			return "", errors.New("conflict")
+		default:
+			return "", nil
+		}
+	}
+	defer func() { runGitSyncCommand = oldRun }()
+
+	err := SyncRepository(context.Background(), "/repo", "stash")
+	if err == nil || !strings.Contains(err.Error(), "stash was kept for manual recovery") {
+		t.Fatalf("SyncRepository() error = %v", err)
 	}
 }
 
