@@ -109,8 +109,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return doctor(args[1:], stdout)
 	case "config":
 		return runConfig(args[1:], os.Stdin, stdout, stderr)
-	case "list":
-		return runList(args[1:], stdout, stderr)
 	case "issue":
 		return runIssue(args[1:], stdout, stderr)
 	case "pr":
@@ -1594,10 +1592,6 @@ Usage:
   korocon pr list [options]
   korocon doctor [--binary codex]
   korocon version
-
-Compat aliases (旧形式):
-  korocon list issue [options]
-  korocon list pr [options]
 
 Run options:
   --provider NAME       implementer provider (legacy alias)
