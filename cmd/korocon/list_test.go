@@ -92,8 +92,16 @@ func TestRunListRejectsInvalidState(t *testing.T) {
 func TestRunIssueListAppliesOptionsAndFilters(t *testing.T) {
 	oldList := listIssuesWithOptions
 	oldState := issueWorkflowState
-	t.Cleanup(func() { listIssuesWithOptions = oldList; issueWorkflowState = oldState })
-	issueWorkflowState = func(_ issueworkflow.Issue, _ string) (string, error) { return "state:detected", nil }
+	t.Cleanup(func() {
+		listIssuesWithOptions = oldList
+		issueWorkflowState = oldState
+	})
+	issueWorkflowState = func(issue issueworkflow.Issue, _ string) (string, error) {
+		if issue.Number == 3 {
+			return "state:design_running", nil
+		}
+		return "state:detected", nil
+	}
 	var gotDir string
 	var gotOptions issueworkflow.IssueListOptions
 	listIssuesWithOptions = func(_ context.Context, dir string, options issueworkflow.IssueListOptions) ([]issueworkflow.Issue, error) {
@@ -112,8 +120,40 @@ func TestRunIssueListAppliesOptionsAndFilters(t *testing.T) {
 	if gotDir != "/myrepo" || gotOptions.State != "all" {
 		t.Fatalf("options = dir %q, %+v", gotDir, gotOptions)
 	}
-	if !strings.Contains(out.String(), "API issue") || strings.Contains(out.String(), "UI issue") {
+	if !strings.Contains(out.String(), "API issue") || !strings.Contains(out.String(), "設計中") || strings.Contains(out.String(), "UI issue") {
 		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestRunIssueSetStatus(t *testing.T) {
+	oldSet := setIssueStatus
+	t.Cleanup(func() { setIssueStatus = oldSet })
+	var gotDir, gotStatus string
+	var gotNumber int
+	setIssueStatus = func(_ context.Context, dir string, number int, status string) (string, error) {
+		gotDir, gotNumber, gotStatus = dir, number, status
+		return "state:detected", nil
+	}
+
+	var out bytes.Buffer
+	if err := runIssue([]string{"set-status", "25", "design", "--dir", "/repo"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if gotDir != "/repo" || gotNumber != 25 || gotStatus != "design" {
+		t.Fatalf("set status = dir %q, number %d, status %q", gotDir, gotNumber, gotStatus)
+	}
+	if !strings.Contains(out.String(), "Issue #25 の工程状態を変更しました: 設計待ち") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestRunIssueSetStatusRejectsInvalidArguments(t *testing.T) {
+	var out bytes.Buffer
+	if err := runIssue([]string{"set-status", "0", "design"}, &out, &out); err == nil {
+		t.Fatal("invalid Issue number was accepted")
+	}
+	if err := runIssue([]string{"set-status", "25"}, &out, &out); err == nil {
+		t.Fatal("missing status was accepted")
 	}
 }
 
@@ -170,8 +210,10 @@ func TestRunIssueHelpPrintsUsage(t *testing.T) {
 	if err := runIssue([]string{"--help"}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "korocon issue list") {
-		t.Fatalf("help missing 'korocon issue list': %q", out.String())
+	for _, want := range []string{"korocon issue list", "korocon issue set-status"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("help missing %q: %q", want, out.String())
+		}
 	}
 }
 

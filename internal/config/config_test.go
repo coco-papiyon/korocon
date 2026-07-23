@@ -239,11 +239,11 @@ func TestDefaultAllowedCommandsMatchesKorobokcle(t *testing.T) {
 		"go build", "go test", "go mod tidy", "go mod download",
 		"git log", "git show", "git grep", "git add", "git commit", "git diff", "git status", "git stash",
 		"git fetch", "git remote", "git ls-remote", "git worktree add",
-		"git --no-pager diff", "git --no-pager grep", "git --no-pager log", "git --no-pager show", "git --no-pager status",
+		"git --no-pager blame", "git --no-pager diff", "git --no-pager grep", "git --no-pager log", "git --no-pager show", "git --no-pager status",
 		"gh pr view", "gh pr diff", "gh pr checks", "gh issue view",
 		"command -v", "cd", "true", "test",
 		"ls", "dir", "cat", "type", "more", "head", "echo", "printf", "sed", "set", "pwd", "grep", "rg", "find", "sort", "tee", "wc",
-		"git branch --show-current",
+		"git branch --show-current", "git rev-parse --verify",
 		"get-childitem", "get-content", "select-object", "select-string",
 	}
 	if got := DefaultAllowedCommands(); !reflect.DeepEqual(got, want) {

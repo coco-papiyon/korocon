@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/coco-papiyon/korocon/internal/workflowstate"
 )
 
 type fakeRunner struct {
@@ -118,6 +120,50 @@ func TestLoadRestoresPhaseFromDatabase(t *testing.T) {
 	}
 	if reloaded.Phase != PhaseDesignReady {
 		t.Fatalf("phase = %q, want %q", reloaded.Phase, PhaseDesignReady)
+	}
+}
+
+func TestDisplayStateForIssueDoesNotCreateState(t *testing.T) {
+	dir := t.TempDir()
+	issue := Issue{Number: 32, Labels: []Label{{Name: "state:design_running"}}}
+	state, err := DisplayStateForIssue(issue, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != "state:design_running" {
+		t.Fatalf("state = %q", state)
+	}
+	if _, found, err := workflowstate.Get(issueStateKey(issue, dir)); err != nil || found {
+		t.Fatalf("saved state found=%v err=%v", found, err)
+	}
+}
+
+func TestSetStatusStoresResumableState(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{responses: []string{`{"number":33,"state":"OPEN"}`}}
+	state, err := setStatus(context.Background(), dir, 33, "implementation", runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != labelDesignApproved {
+		t.Fatalf("state = %q", state)
+	}
+	if len(runner.calls) != 1 || strings.Join(runner.calls[0], " ") != "issue view 33 --json number,state,url" {
+		t.Fatalf("calls = %v", runner.calls)
+	}
+	saved, found, err := workflowstate.Get(issueStateKey(Issue{Number: 33}, dir))
+	if err != nil || !found || saved != labelDesignApproved {
+		t.Fatalf("saved=%q found=%v err=%v", saved, found, err)
+	}
+}
+
+func TestSetStatusRejectsClosedIssueAndUnsupportedStatus(t *testing.T) {
+	runner := &fakeRunner{responses: []string{`{"number":34,"state":"CLOSED"}`}}
+	if _, err := setStatus(context.Background(), t.TempDir(), 34, "design", runner); err == nil || !strings.Contains(err.Error(), "openではない") {
+		t.Fatalf("closed Issue error = %v", err)
+	}
+	if _, err := setStatus(context.Background(), t.TempDir(), 34, "review", &fakeRunner{}); err == nil || !strings.Contains(err.Error(), "design or implementation") {
+		t.Fatalf("unsupported status error = %v", err)
 	}
 }
 

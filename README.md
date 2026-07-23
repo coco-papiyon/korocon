@@ -28,13 +28,15 @@ korocon config allow-path "~/.copilot/session-state/*/plan.md"
 
 `korocon config allow`は`builtinAllowedCommands`へ自動承認コマンドを追加します。`korocon config allow-path`は`builtinAllowedPaths`へglob形式のパスを追加します。引数を省略した場合は対話入力になります。
 
-Issue/PR一覧はAIを起動せず、次のサブコマンドで表示できます。工程状態は表示せず、GitHubから取得した情報のみを表示します。
+Issue/PR一覧はAIを起動せず、次のサブコマンドで表示できます。Issue一覧にはKoroconの工程状態も表示します。
 
 ```sh
 korocon issue list
 korocon pr list
 korocon issue list --state all --label backend
 korocon pr list --search 'is:open' --json
+korocon issue set-status 25 design
+korocon issue set-status 25 implementation
 ```
 
 旧形式（互換別名）:
@@ -43,6 +45,8 @@ korocon pr list --search 'is:open' --json
 korocon list issue
 korocon list pr
 ```
+
+停止した工程を自動処理対象へ戻す場合は、`korocon issue set-status <NUMBER> design`または`implementation`を実行します。`design`は設計を、`implementation`は実装を次回の`--implementer --auto`で再実行可能な状態へ戻します。工程状態はローカルの`korocon.db`に保存され、GitHubのラベル・本文・コメントは変更しません。
 
 `--state`は`open`（既定）、`closed`、`all`を指定できます。PRは`--state open`の場合Draftを除外します。`--label`、`--exclude-label`、`--title`、`--author`は複数指定でき、`--json`を指定するとJSON配列を出力します。
 

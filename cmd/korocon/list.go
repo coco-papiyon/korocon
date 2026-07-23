@@ -9,12 +9,15 @@ import (
 	"io"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
 	issueworkflow "github.com/coco-papiyon/korocon/internal/issue"
 	prworkflow "github.com/coco-papiyon/korocon/internal/pullrequest"
 )
+
+var setIssueStatus = issueworkflow.SetStatus
 
 func runIssue(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
@@ -29,9 +32,11 @@ func runIssue(args []string, stdout, stderr io.Writer) error {
 	switch verb {
 	case "list":
 		return runIssueList(args[1:], "korocon issue list", stdout, stderr)
+	case "set-status":
+		return runIssueSetStatus(args[1:], stdout, stderr)
 	default:
 		printIssueUsage(stderr)
-		return fmt.Errorf("unknown issue verb %q (use 'list')", args[0])
+		return fmt.Errorf("unknown issue verb %q (use 'list' or 'set-status')", args[0])
 	}
 }
 
@@ -74,9 +79,9 @@ func runList(args []string, stdout, stderr io.Writer) error {
 	}
 }
 
-// issueWorkflowState resolves the persisted workflow state for an issue.
-// Overridable for testing.
-var issueWorkflowState = issueworkflow.StateForIssue
+// issueWorkflowState resolves the persisted workflow state for an issue
+// without modifying stored workflow state. It is overridable for testing.
+var issueWorkflowState = issueworkflow.DisplayStateForIssue
 
 // prWorkflowState resolves the persisted workflow state for a pull request.
 // Overridable for testing.
@@ -121,6 +126,51 @@ func runIssueList(args []string, cmdName string, stdout, stderr io.Writer) error
 		return writeListJSON(stdout, issues)
 	}
 	return writeIssueList(stdout, issues, *dir)
+}
+
+func runIssueSetStatus(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("korocon issue set-status", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dir := fs.String("dir", ".", "working directory")
+	flagArgs, positionalArgs := splitIssueSetStatusArgs(args)
+	if err := fs.Parse(flagArgs); err != nil {
+		return err
+	}
+	if len(positionalArgs) != 2 {
+		return errors.New("Usage: korocon issue set-status <NUMBER> <design|implementation> [--dir PATH]")
+	}
+	number, err := strconv.Atoi(strings.TrimSpace(positionalArgs[0]))
+	if err != nil || number < 1 {
+		return fmt.Errorf("Issue番号が不正です: %q", positionalArgs[0])
+	}
+	state, err := setIssueStatus(context.Background(), *dir, number, positionalArgs[1])
+	if err != nil {
+		return fmt.Errorf("Issue #%dの工程状態を変更できません: %w", number, err)
+	}
+	if _, err := fmt.Fprintf(stdout, "Issue #%d の工程状態を変更しました: %s\n次回の --implementer --auto では%sとして処理されます。\n", number, issueworkflow.StatusName(state), issueworkflow.StatusName(state)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func splitIssueSetStatusArgs(args []string) (flagArgs, positionalArgs []string) {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "--dir" {
+			flagArgs = append(flagArgs, arg)
+			if index+1 < len(args) {
+				index++
+				flagArgs = append(flagArgs, args[index])
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "--dir=") || strings.HasPrefix(arg, "-") {
+			flagArgs = append(flagArgs, arg)
+			continue
+		}
+		positionalArgs = append(positionalArgs, arg)
+	}
+	return flagArgs, positionalArgs
 }
 
 func runPRList(args []string, cmdName string, stdout, stderr io.Writer) error {
@@ -289,6 +339,7 @@ func yesNo(value bool) string {
 func printIssueUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage:
   korocon issue list [options]
+  korocon issue set-status <NUMBER> <design|implementation> [--dir PATH]
 
 Options:
   --state STATE         open, closed, or all (default: open)
@@ -335,18 +386,18 @@ Options:
 }
 
 var issueStateDisplayNames = map[string]string{
-	"":                               "設計待ち",
-	"state:detected":                 "設計待ち",
-	"state:design_running":           "設計中",
-	"state:design_ready":             "設計完了・承認待ち",
-	"state:design_approved":          "実装待ち",
-	"state:implementation_running":   "実装中",
-	"state:implementation_ready":     "実装完了・承認待ち",
-	"state:implementation_approved":  "実装承認済み",
-	"state:pr_created":               "PR作成済み",
-	"state:design_failed":            "設計失敗・再実行待ち",
-	"state:implementation_failed":    "実装失敗・再実行待ち",
-	"state:failed":                   "失敗・再実行待ち",
+	"":                              "設計待ち",
+	"state:detected":                "設計待ち",
+	"state:design_running":          "設計中",
+	"state:design_ready":            "設計完了・承認待ち",
+	"state:design_approved":         "実装待ち",
+	"state:implementation_running":  "実装中",
+	"state:implementation_ready":    "実装完了・承認待ち",
+	"state:implementation_approved": "実装承認済み",
+	"state:pr_created":              "PR作成済み",
+	"state:design_failed":           "設計失敗・再実行待ち",
+	"state:implementation_failed":   "実装失敗・再実行待ち",
+	"state:failed":                  "失敗・再実行待ち",
 }
 
 func issueWorkflowDisplayName(state string) string {

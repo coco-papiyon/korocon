@@ -158,6 +158,96 @@ func ListWithOptions(ctx context.Context, workingDir string, options IssueListOp
 	return issues, nil
 }
 
+// DisplayStateForIssue returns the saved workflow state without creating or
+// migrating state. This keeps list commands read-only.
+func DisplayStateForIssue(issue Issue, workingDir string) (string, error) {
+	state, found, err := workflowstate.Get(issueStateKey(issue, workingDir))
+	if err != nil {
+		return "", err
+	}
+	if found {
+		return strings.TrimSpace(state), nil
+	}
+	for _, label := range issue.Labels {
+		state := strings.ToLower(strings.TrimSpace(label.Name))
+		if _, ok := stateLabels[state]; ok {
+			return state, nil
+		}
+	}
+	return "state:detected", nil
+}
+
+// StatusName returns the user-facing name for an Issue workflow state.
+func StatusName(state string) string {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "state:detected":
+		return "設計待ち"
+	case labelDesignRunning:
+		return "設計中"
+	case labelDesignReady:
+		return "設計完了・承認待ち"
+	case labelDesignApproved:
+		return "実装待ち"
+	case labelImplementationRunning:
+		return "実装中"
+	case labelImplementationReady:
+		return "実装完了・承認待ち"
+	case labelDesignFailed:
+		return "設計失敗・再実行待ち"
+	case labelImplementationFailed:
+		return "実装失敗・再実行待ち"
+	case "state:failed":
+		return "失敗・再実行待ち"
+	case labelImplementationApproved, labelPRCreated:
+		return "完了"
+	default:
+		return strings.TrimSpace(state)
+	}
+}
+
+// SetStatus resets an open Issue to the requested resumable workflow state.
+// Supported statuses are design and implementation; internal state values are
+// deliberately not accepted from the command line.
+func SetStatus(ctx context.Context, workingDir string, number int, status string) (string, error) {
+	return setStatus(ctx, workingDir, number, status, ghCommandRunner{})
+}
+
+func setStatus(ctx context.Context, workingDir string, number int, status string, runner commandRunner) (string, error) {
+	if number < 1 {
+		return "", errors.New("issue number must be greater than zero")
+	}
+	target, err := resumableState(status)
+	if err != nil {
+		return "", err
+	}
+	raw, err := runner.Run(ctx, workingDir, "issue", "view", strconv.Itoa(number), "--json", "number,state,url")
+	if err != nil {
+		return "", err
+	}
+	var issue Issue
+	if err := json.Unmarshal(raw, &issue); err != nil {
+		return "", fmt.Errorf("decode issue #%d: %w", number, err)
+	}
+	if state := strings.TrimSpace(issue.State); state != "" && !strings.EqualFold(state, "open") {
+		return "", fmt.Errorf("Issue #%dはopenではないため工程状態を変更できません (state: %s)", number, state)
+	}
+	if err := workflowstate.Set(issueStateKey(issue, workingDir), target); err != nil {
+		return "", fmt.Errorf("save Issue #%d workflow state: %w", number, err)
+	}
+	return target, nil
+}
+
+func resumableState(status string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "design":
+		return "state:detected", nil
+	case "implementation":
+		return labelDesignApproved, nil
+	default:
+		return "", fmt.Errorf("status must be design or implementation: %q", status)
+	}
+}
+
 func load(ctx context.Context, workingDir string, number int, workspaceName string, runner commandRunner) (*Workflow, error) {
 	if number < 1 {
 		return nil, errors.New("issue number must be greater than zero")

@@ -1590,6 +1590,7 @@ Usage:
   korocon config allow [COMMAND]
   korocon config allow-path [GLOB]
   korocon issue list [options]
+  korocon issue set-status <NUMBER> <design|implementation> [--dir PATH]
   korocon pr list [options]
   korocon doctor [--binary codex]
   korocon version
