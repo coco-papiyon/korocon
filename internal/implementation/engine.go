@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/coco-papiyon/korocon/internal/artifact"
 	appconfig "github.com/coco-papiyon/korocon/internal/config"
 	"github.com/coco-papiyon/korocon/internal/runner"
 )
@@ -465,7 +466,7 @@ func (e *Engine) implementationPrompt(workflowPrompt, design, feedback string, a
 		parts = append(parts, "", "検証者からの修正指示:", feedback)
 	}
 	parts = append(parts, "", "設計に従って実装と必要なテストを行い、リポジトリのimplement-from-designスキルに従って結果をまとめてください。")
-	return strings.Join(parts, "\n")
+	return artifact.RequireFullMarkdown(strings.Join(parts, "\n"))
 }
 
 func (e *Engine) verificationPrompt(design, implementation string, attempt int) string {

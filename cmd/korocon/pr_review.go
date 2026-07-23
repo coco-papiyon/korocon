@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/coco-papiyon/korocon/internal/artifact"
 	"github.com/coco-papiyon/korocon/internal/daemon"
 	prworkflow "github.com/coco-papiyon/korocon/internal/pullrequest"
 )
@@ -406,7 +407,7 @@ func runtimeVerificationPrompt(command string) string {
 	if command = strings.TrimSpace(command); command != "" {
 		lines = append(lines, "動作確認コマンドは別プロセスで起動済みです: "+command)
 	}
-	return strings.Join(lines, "\n")
+	return artifact.RequireFullMarkdown(strings.Join(lines, "\n"))
 }
 
 func (c *prReviewController) handleFailureInput(ctx context.Context, input, prompt string, phase prworkflow.Phase, reset func(context.Context) error) (daemon.InputAction, error) {

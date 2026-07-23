@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/coco-papiyon/korocon/internal/artifact"
 	"github.com/coco-papiyon/korocon/internal/daemon"
 	prworkflow "github.com/coco-papiyon/korocon/internal/pullrequest"
 )
@@ -410,5 +411,15 @@ func TestPRConflictApprovalPublishesAndReturnsToSelection(t *testing.T) {
 	action, err := controller.HandleInput(context.Background(), "approve")
 	if err != nil || !action.Handled || !action.Restart || workflow.conflictApproved != "conflict result" || closed != 1 {
 		t.Fatalf("action=%+v workflow=%+v closed=%d err=%v", action, workflow, closed, err)
+	}
+}
+
+func TestRuntimeVerificationPromptRequiresCompleteMarkdown(t *testing.T) {
+	prompt := runtimeVerificationPrompt("go test ./...")
+	if strings.Count(prompt, artifact.FullMarkdownInstruction) != 1 {
+		t.Fatalf("full Markdown contract count = %d:\n%s", strings.Count(prompt, artifact.FullMarkdownInstruction), prompt)
+	}
+	if !strings.HasSuffix(prompt, artifact.FullMarkdownInstruction) {
+		t.Fatalf("full Markdown contract is not at the end:\n%s", prompt)
 	}
 }

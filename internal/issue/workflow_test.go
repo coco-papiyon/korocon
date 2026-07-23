@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/coco-papiyon/korocon/internal/artifact"
 	"github.com/coco-papiyon/korocon/internal/workflowstate"
 )
 
@@ -49,6 +50,7 @@ func TestLoadBuildsDesignPromptFromIssueContext(t *testing.T) {
 	if strings.Contains(prompt, "state:design_ready") {
 		t.Fatalf("tool workflow details leaked into AI prompt: %s", prompt)
 	}
+	assertFullMarkdownContract(t, prompt)
 }
 
 func TestLoadSelectsImplementationOnlyAfterDesignApproval(t *testing.T) {
@@ -210,6 +212,17 @@ func TestRevisionPromptIncludesFeedbackAndIssue(t *testing.T) {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt does not contain %q: %s", expected, prompt)
 		}
+	}
+	assertFullMarkdownContract(t, prompt)
+}
+
+func assertFullMarkdownContract(t *testing.T, prompt string) {
+	t.Helper()
+	if strings.Count(prompt, artifact.FullMarkdownInstruction) != 1 {
+		t.Fatalf("full Markdown contract count = %d:\n%s", strings.Count(prompt, artifact.FullMarkdownInstruction), prompt)
+	}
+	if !strings.HasSuffix(prompt, artifact.FullMarkdownInstruction) {
+		t.Fatalf("full Markdown contract is not at the end:\n%s", prompt)
 	}
 }
 

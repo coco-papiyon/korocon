@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/coco-papiyon/korocon/internal/artifact"
 	"github.com/coco-papiyon/korocon/internal/runner"
 )
 
@@ -330,5 +331,24 @@ func TestPullRequestURLUsesLastURLLine(t *testing.T) {
 func TestParseVerificationRejectsUnknownStatus(t *testing.T) {
 	if _, err := parseVerification(`{"status":"unknown"}`); err == nil {
 		t.Fatal("unknown verification status was accepted")
+	}
+}
+
+func TestImplementationPromptRequiresCompleteMarkdownButVerifierStaysJSON(t *testing.T) {
+	engine := New(Config{LoopCount: 2})
+	engine.worktree = "/tmp/worktree"
+	engine.branch = "feature"
+
+	prompt := engine.implementationPrompt("workflow", "design", "", 1)
+	if strings.Count(prompt, artifact.FullMarkdownInstruction) != 1 || !strings.HasSuffix(prompt, artifact.FullMarkdownInstruction) {
+		t.Fatalf("implementation prompt does not end with the full Markdown contract:\n%s", prompt)
+	}
+
+	verificationPrompt := engine.verificationPrompt("design", "implementation", 1)
+	if strings.Contains(verificationPrompt, artifact.FullMarkdownInstruction) {
+		t.Fatalf("JSON verifier prompt contains the Markdown contract:\n%s", verificationPrompt)
+	}
+	if !strings.Contains(verificationPrompt, "最終回答はJSONオブジェクトのみ") {
+		t.Fatalf("JSON verifier contract is missing:\n%s", verificationPrompt)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/coco-papiyon/korocon/internal/artifact"
 	"github.com/coco-papiyon/korocon/internal/runner"
 )
 
@@ -65,5 +66,23 @@ func TestFixEngineRepeatsImplementationAndVerification(t *testing.T) {
 	}
 	if err := engine.Close(); err != nil || !implementer.closed || !verifier.closed {
 		t.Fatalf("close err=%v implementer=%t verifier=%t", err, implementer.closed, verifier.closed)
+	}
+}
+
+func TestFixImplementationPromptRequiresCompleteMarkdownButVerifierStaysJSON(t *testing.T) {
+	engine := NewFixEngine(FixConfig{LoopCount: 2, HeadRefName: "feature/8"})
+	engine.worktree = "/tmp/worktree"
+
+	prompt := engine.fixImplementationPrompt("workflow", "", 1)
+	if strings.Count(prompt, artifact.FullMarkdownInstruction) != 1 || !strings.HasSuffix(prompt, artifact.FullMarkdownInstruction) {
+		t.Fatalf("fix prompt does not end with the full Markdown contract:\n%s", prompt)
+	}
+
+	verificationPrompt := engine.fixVerificationPrompt("workflow", "implementation", 1)
+	if strings.Contains(verificationPrompt, artifact.FullMarkdownInstruction) {
+		t.Fatalf("JSON verifier prompt contains the Markdown contract:\n%s", verificationPrompt)
+	}
+	if !strings.Contains(verificationPrompt, "最終回答はJSONオブジェクトのみ") {
+		t.Fatalf("JSON verifier contract is missing:\n%s", verificationPrompt)
 	}
 }

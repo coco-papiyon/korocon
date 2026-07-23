@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/coco-papiyon/korocon/internal/artifact"
 	appconfig "github.com/coco-papiyon/korocon/internal/config"
 	"github.com/coco-papiyon/korocon/internal/runner"
 )
@@ -139,7 +140,7 @@ func (e *FixEngine) RunConflict(ctx context.Context, prompt, model string, handl
 	if err != nil {
 		return runner.TurnResult{}, err
 	}
-	prompt = strings.Join([]string{
+	prompt = artifact.RequireFullMarkdown(strings.Join([]string{
 		prompt,
 		"",
 		"作業ディレクトリ: " + e.worktree,
@@ -147,7 +148,7 @@ func (e *FixEngine) RunConflict(ctx context.Context, prompt, model string, handl
 		"PR baseブランチ: " + e.cfg.BaseRefName,
 		"競合ファイル:", files,
 		"作業ディレクトリではbaseブランチのmergeを開始済みです。競合マーカーを解消し、必要なテストを実行してください。",
-	}, "\n")
+	}, "\n"))
 	return e.implementer.RunTurn(ctx, prompt, model, onEvent)
 }
 
@@ -392,7 +393,7 @@ func (e *FixEngine) fixImplementationPrompt(workflowPrompt, feedback string, att
 		parts = append(parts, "", "検証者からの修正指示:", feedback)
 	}
 	parts = append(parts, "", "ユーザーの修正方針に従って実装と必要なテストを行い、review-comment-fixスキルの出力形式で結果をまとめてください。")
-	return strings.Join(parts, "\n")
+	return artifact.RequireFullMarkdown(strings.Join(parts, "\n"))
 }
 
 func (e *FixEngine) fixVerificationPrompt(workflowPrompt, implementation string, attempt int) string {

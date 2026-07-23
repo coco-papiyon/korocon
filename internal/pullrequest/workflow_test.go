@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/coco-papiyon/korocon/internal/artifact"
 )
 
 type fakeRunner struct {
@@ -225,5 +227,27 @@ func TestPullRequestPhaseDetectsReviewApproved(t *testing.T) {
 	pr := PullRequest{Labels: []Label{{Name: "state:review_approved"}}}
 	if phase := pullRequestPhase(pr); phase != PhaseReviewApproved {
 		t.Fatalf("phase = %q", phase)
+	}
+}
+
+func TestArtifactProducingPromptsRequireCompleteMarkdown(t *testing.T) {
+	workflow := &Workflow{
+		PR: PullRequest{Number: 4, Title: "Feature"},
+	}
+	prompts := map[string]string{
+		"review":   workflow.Prompt(),
+		"revision": workflow.RevisionPrompt("補足"),
+		"fix":      workflow.FixPrompt("修正"),
+		"conflict": workflow.ConflictPrompt("追加指示"),
+	}
+	for name, prompt := range prompts {
+		t.Run(name, func(t *testing.T) {
+			if strings.Count(prompt, artifact.FullMarkdownInstruction) != 1 {
+				t.Fatalf("full Markdown contract count = %d:\n%s", strings.Count(prompt, artifact.FullMarkdownInstruction), prompt)
+			}
+			if !strings.HasSuffix(prompt, artifact.FullMarkdownInstruction) {
+				t.Fatalf("full Markdown contract is not at the end:\n%s", prompt)
+			}
+		})
 	}
 }

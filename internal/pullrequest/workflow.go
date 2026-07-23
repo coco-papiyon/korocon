@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/coco-papiyon/korocon/internal/artifact"
 	"github.com/coco-papiyon/korocon/internal/workflowstate"
 )
 
@@ -214,11 +215,11 @@ func (w *Workflow) Prompt() string {
 	if w.Phase == PhaseFix {
 		return w.FixPrompt("")
 	}
-	return strings.Join([]string{
+	return artifact.RequireFullMarkdown(strings.Join([]string{
 		"以下のGitHub Pull Requestをレビューしてください。",
 		"リポジトリのreview-pull-requestスキルに従い、差分、関連Issue、テスト結果を確認してください。",
 		"", "Pull Request情報:", w.Context(),
-	}, "\n")
+	}, "\n"))
 }
 
 func (w *Workflow) ConflictPrompt(feedback string) string {
@@ -230,15 +231,15 @@ func (w *Workflow) ConflictPrompt(feedback string) string {
 	if strings.TrimSpace(feedback) != "" {
 		lines = append(lines, "", "追加指示:", strings.TrimSpace(feedback))
 	}
-	return strings.Join(append(lines, "", "Pull Request情報:", w.Context()), "\n")
+	return artifact.RequireFullMarkdown(strings.Join(append(lines, "", "Pull Request情報:", w.Context()), "\n"))
 }
 
 func (w *Workflow) RevisionPrompt(feedback string) string {
-	return strings.Join([]string{
+	return artifact.RequireFullMarkdown(strings.Join([]string{
 		"以下の補足を反映し、GitHub Pull Requestを再レビューしてください。",
 		"リポジトリのreview-pull-requestスキルに従ってください。",
 		"", "補足:", strings.TrimSpace(feedback), "", "Pull Request情報:", w.Context(),
-	}, "\n")
+	}, "\n"))
 }
 
 func (w *Workflow) FixPrompt(instruction string) string {
@@ -254,7 +255,7 @@ func (w *Workflow) FixPrompt(instruction string) string {
 	if strings.TrimSpace(w.reviewFeedback) != "" {
 		lines = append(lines, "", "取得済みのレビュー指摘・全コメント:", strings.TrimSpace(w.reviewFeedback))
 	}
-	return strings.Join(append(lines, "", "Pull Request情報:", w.Context()), "\n")
+	return artifact.RequireFullMarkdown(strings.Join(append(lines, "", "Pull Request情報:", w.Context()), "\n"))
 }
 
 func (w *Workflow) Context() string {

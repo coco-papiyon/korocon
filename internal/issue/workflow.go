@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/coco-papiyon/korocon/internal/artifact"
 	"github.com/coco-papiyon/korocon/internal/workflowstate"
 )
 
@@ -326,13 +327,13 @@ func (w *Workflow) Prompt() string {
 	if w.Phase == PhaseImplementation {
 		action = "実装"
 	}
-	return strings.Join([]string{
+	return artifact.RequireFullMarkdown(strings.Join([]string{
 		fmt.Sprintf("以下のGitHub Issueの%sを行ってください。", action),
 		"具体的な手順と成果物の形式は、リポジトリで利用可能なスキルの指示に従ってください。",
 		"",
 		"Issue情報:",
 		w.Context(),
-	}, "\n")
+	}, "\n"))
 }
 
 func (w *Workflow) IssueNumber() int {
@@ -406,7 +407,7 @@ func (w *Workflow) RevisionPrompt(feedback string) string {
 	if w.Phase == PhaseImplementation || w.Phase == PhaseImplementationReady {
 		action = "再実装"
 	}
-	return strings.Join([]string{
+	return artifact.RequireFullMarkdown(strings.Join([]string{
 		fmt.Sprintf("以下のフィードバックを反映し、GitHub Issueの%sを行ってください。", action),
 		"具体的な手順と成果物の形式は、リポジトリで利用可能なスキルの指示に従ってください。",
 		"",
@@ -415,7 +416,7 @@ func (w *Workflow) RevisionPrompt(feedback string) string {
 		"",
 		"Issue情報:",
 		w.Context(),
-	}, "\n")
+	}, "\n"))
 }
 
 func (w *Workflow) Context() string {
