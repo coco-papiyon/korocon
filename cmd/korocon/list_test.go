@@ -105,6 +105,37 @@ func TestRunIssueSetStatusRejectsInvalidArguments(t *testing.T) {
 	}
 }
 
+func TestRunPRSetStatus(t *testing.T) {
+	oldSet := setPRStatus
+	t.Cleanup(func() { setPRStatus = oldSet })
+	var gotDir, gotStatus string
+	var gotNumber int
+	setPRStatus = func(_ context.Context, dir string, number int, status string) (string, error) {
+		gotDir, gotNumber, gotStatus = dir, number, status
+		return "state:pr_review_comment", nil
+	}
+
+	var out bytes.Buffer
+	if err := runPR([]string{"set-status", "25", "IMPLEMENTATION", "--dir", "/repo"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if gotDir != "/repo" || gotNumber != 25 || gotStatus != "IMPLEMENTATION" {
+		t.Fatalf("set status = dir %q, number %d, status %q", gotDir, gotNumber, gotStatus)
+	}
+	if !strings.Contains(out.String(), "PR #25 の工程状態を変更しました: レビュー指摘修正待ち") || !strings.Contains(out.String(), "--implementer --auto") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestRunPRSetStatusRejectsInvalidArguments(t *testing.T) {
+	var out bytes.Buffer
+	for _, args := range [][]string{{"set-status", "0", "review"}, {"set-status", "25"}, {"set-status", "25", "review", "extra"}} {
+		if err := runPR(args, &out, &out); err == nil {
+			t.Fatalf("invalid PR arguments were accepted: %v", args)
+		}
+	}
+}
+
 func TestRunIssueHelpPrintsUsage(t *testing.T) {
 	var out bytes.Buffer
 	if err := runIssue([]string{"--help"}, &out, &out); err != nil {
@@ -193,7 +224,7 @@ func TestWritePullRequestListShowsWorkflowState(t *testing.T) {
 	if err := writePullRequestList(&out, prs, "."); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "レビュー中") || !strings.Contains(out.String(), "未レビュー") {
+	if !strings.Contains(out.String(), "レビュー中") || !strings.Contains(out.String(), "レビュー待ち") {
 		t.Fatalf("output = %q", out.String())
 	}
 	if strings.Contains(out.String(), "OPEN") || strings.Contains(out.String(), "state:") {
@@ -278,12 +309,12 @@ func TestPRWorkflowDisplayNameMapsAllExpectedStates(t *testing.T) {
 		state string
 		want  string
 	}{
-		{"state:detected", "未レビュー"},
-		{"", "未レビュー"},
+		{"state:detected", "レビュー待ち"},
+		{"", "レビュー待ち"},
 		{"state:review_running", "レビュー中"},
 		{"state:review_ready", "レビュー完了・承認待ち"},
 		{"state:review_approved", "レビュー承認済み"},
-		{"state:pr_review_comment", "レビュー修正指示あり"},
+		{"state:pr_review_comment", "レビュー指摘修正待ち"},
 		{"state:review_fix_implementation_running", "レビュー修正実装中"},
 		{"state:pr_conflict", "コンフリクト"},
 		{"state:pr_conflict_running", "コンフリクト解消中"},

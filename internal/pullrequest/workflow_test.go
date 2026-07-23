@@ -11,6 +11,40 @@ import (
 	"github.com/coco-papiyon/korocon/internal/artifact"
 )
 
+func TestSetStatusValidatesPRAndPersistsLocalState(t *testing.T) {
+	dir := t.TempDir()
+
+	runner := &fakeRunner{responses: map[string]string{
+		"pr view 25 --json number,state,isDraft,url": `{"number":25,"state":"OPEN","isDraft":false,"url":"https://github.com/acme/repo/pull/25"}`,
+	}}
+	state, err := setStatus(context.Background(), dir, 25, "  IMPLEMENTATION ", runner)
+	if err != nil || state != "state:pr_review_comment" {
+		t.Fatalf("setStatus() = %q, %v", state, err)
+	}
+	state, err = setStatus(context.Background(), dir, 25, "review", runner)
+	if err != nil || state != "" {
+		t.Fatalf("review setStatus() = %q, %v", state, err)
+	}
+}
+
+func TestSetStatusRejectsClosedDraftAndInvalidPR(t *testing.T) {
+	for name, response := range map[string]string{
+		"closed":          `{"number":25,"state":"CLOSED","isDraft":false}`,
+		"merged":          `{"number":25,"state":"MERGED","isDraft":false}`,
+		"draft":           `{"number":25,"state":"OPEN","isDraft":true}`,
+		"number missing":  `{"state":"OPEN","isDraft":false}`,
+		"number mismatch": `{"number":24,"state":"OPEN","isDraft":false}`,
+	} {
+		runner := &fakeRunner{responses: map[string]string{"pr view 25 --json number,state,isDraft,url": response}}
+		if _, err := setStatus(context.Background(), t.TempDir(), 25, "review", runner); err == nil {
+			t.Fatalf("%s PR was accepted", name)
+		}
+	}
+	if _, err := setStatus(context.Background(), t.TempDir(), 25, "other", &fakeRunner{}); err == nil {
+		t.Fatal("invalid status was accepted")
+	}
+}
+
 type fakeRunner struct {
 	responses map[string]string
 	calls     []string

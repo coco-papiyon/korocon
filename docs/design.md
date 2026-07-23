@@ -153,6 +153,8 @@ Issue実装・検証用Copilotセッションは、確定した実装worktreeを
 
 選択したIssueをGitHub CLIからJSONで取得し、状態ラベルから設計・実装を判定します。Codexへ渡すIssueコンテキストの生成と、ジョブ開始・完了時の状態ラベル同期を担当します。具体的な設計・実装手順は扱いません。
 
+PRの状態変更は`korocon pr set-status <NUMBER> <review|implementation> [--dir PATH]`で行います。`cmd/korocon`は引数と`--dir`を検証して`internal/pullrequest.SetStatus`を呼び出し、成功時に状態名と次回の担当工程を表示します。`internal/pullrequest`は`gh pr view`でOPENかつ非Draftであることを確認した後、`workflowstate`の`pull_request`キーへ`review`を空状態、`implementation`を`state:pr_review_comment`として保存します。GitHubのラベルや本文、コメント、レビューは変更しません。保存済み状態はPR一覧、レビューア自動処理、実装者自動処理で優先して利用されます。
+
 ### `internal/implementation`
 
 実装worktreeの作成、実装用・検証用Codexセッション、反復制御、検証JSONの判定を担当します。実装用threadは`workspace-write`、検証用threadは`read-only`で、どちらも承認ポリシーは`on-request`です。

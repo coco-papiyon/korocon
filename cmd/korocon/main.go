@@ -1613,6 +1613,7 @@ Usage:
   korocon issue list [options]
   korocon issue set-status <NUMBER> <design|implementation> [--dir PATH]
   korocon pr list [options]
+  korocon pr set-status <NUMBER> <review|implementation> [--dir PATH]
   korocon doctor [--binary codex]
   korocon version
 

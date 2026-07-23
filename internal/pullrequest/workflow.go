@@ -677,6 +677,76 @@ func StateForPullRequest(pr PullRequest, workingDir string) (string, error) {
 	return state, nil
 }
 
+// StatusName returns the user-facing name for a pull request workflow state.
+func StatusName(state string) string {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "", "state:detected":
+		return "レビュー待ち"
+	case "state:pr_review_comment":
+		return "レビュー指摘修正待ち"
+	case "state:review_approved":
+		return "レビュー承認済み"
+	case "state:review_failed":
+		return "レビュー失敗・再実行待ち"
+	case "state:review_fix_failed":
+		return "レビュー修正失敗・再実行待ち"
+	case "state:pr_conflict":
+		return "コンフリクト"
+	case "state:completed":
+		return "完了"
+	default:
+		return strings.TrimSpace(state)
+	}
+}
+
+// SetStatus resets an open, non-draft pull request to a resumable workflow
+// state. GitHub is queried for validation, but no GitHub resource is changed.
+func SetStatus(ctx context.Context, workingDir string, number int, status string) (string, error) {
+	return setStatus(ctx, workingDir, number, status, ghCommandRunner{})
+}
+
+func setStatus(ctx context.Context, workingDir string, number int, status string, runner commandRunner) (string, error) {
+	if number < 1 {
+		return "", errors.New("pull request number must be greater than zero")
+	}
+	target, err := resumableState(status)
+	if err != nil {
+		return "", err
+	}
+	raw, err := runner.Run(ctx, workingDir, "pr", "view", strconv.Itoa(number), "--json", "number,state,isDraft,url")
+	if err != nil {
+		return "", err
+	}
+	var pr PullRequest
+	if err := json.Unmarshal(raw, &pr); err != nil {
+		return "", fmt.Errorf("decode pull request #%d: %w", number, err)
+	}
+	if pr.Number != number {
+		return "", fmt.Errorf("PR #%dの取得結果が一致しません (number: %d)", number, pr.Number)
+	}
+	if !strings.EqualFold(strings.TrimSpace(pr.State), "open") {
+		return "", fmt.Errorf("PR #%dはopenではないため工程状態を変更できません (state: %s)", number, strings.TrimSpace(pr.State))
+	}
+	if pr.IsDraft {
+		return "", fmt.Errorf("PR #%dはDraftのため工程状態を変更できません", number)
+	}
+	if err := workflowstate.Set(pullRequestStateKey(pr, workingDir), target); err != nil {
+		return "", fmt.Errorf("save PR #%d workflow state: %w", number, err)
+	}
+	return target, nil
+}
+
+func resumableState(status string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "review":
+		return "", nil
+	case "implementation":
+		return "state:pr_review_comment", nil
+	default:
+		return "", fmt.Errorf("status must be review or implementation: %q", status)
+	}
+}
+
 func pullRequestStateForPhase(phase Phase) string {
 	switch phase {
 	case PhaseReviewApproved:
