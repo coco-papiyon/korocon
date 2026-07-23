@@ -99,6 +99,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 	defer cancel()
 
 	var nextID atomic.Uint64
+	var activeJobID atomic.Uint64
 	var restartRequested atomic.Bool
 	var wg sync.WaitGroup
 	var writeMu sync.Mutex
@@ -159,6 +160,10 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		allowedMu.RLock()
 		allowed := append([]string(nil), allowedCommands...)
 		jobID, hasJobID := requestCtx.Value(jobContextKey{}).(uint64)
+		if !hasJobID || jobID == 0 {
+			jobID = activeJobID.Load()
+			hasJobID = jobID != 0
+		}
 		allowAllCommands := temporaryProcessAllowAll || (hasJobID && temporaryJobAllowAll[jobID])
 		paths := append([]string(nil), allowedPaths...)
 		allowedMu.RUnlock()
@@ -190,7 +195,6 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		if !pathRequest {
 			command = approvalCommand(params)
 		}
-		jobID, _ = requestCtx.Value(jobContextKey{}).(uint64)
 		prompt := &approvalPrompt{decision: make(chan string, 1), command: command, jobID: jobID}
 		approvalMu.Lock()
 		pendingApproval = prompt
@@ -496,6 +500,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			var result runner.TurnResult
 			var err error
 			jobCtx := context.WithValue(ctx, jobContextKey{}, job.id)
+			activeJobID.Store(job.id)
 			if job.execute != nil {
 				sessionMu.Lock()
 				if primarySession != nil {
@@ -515,6 +520,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 					result, err = session.RunTurn(jobCtx, job.prompt, "", showProgress)
 				}
 			}
+			activeJobID.Store(0)
 			if diff, diffErr := captureGitDiff(cfg.WorkingDir); diffErr == nil {
 				diffMu.Lock()
 				latestDiff = diff

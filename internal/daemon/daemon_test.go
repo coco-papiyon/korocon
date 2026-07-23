@@ -38,15 +38,18 @@ type transientApprovalSession struct {
 func (s *transientApprovalSession) RunTurn(ctx context.Context, _ string, _ string, _ func()) (runner.TurnResult, error) {
 	s.calls++
 	params, _ := json.Marshal(map[string]string{"command": "temporary-command"})
+	// Real Codex/Copilot sessions invoke the approval handler with their
+	// process context rather than the RunTurn context.
+	requestCtx := context.Background()
 	if s.calls == 1 {
-		if _, err := s.handler(ctx, "item/commandExecution/requestApproval", params); err != nil {
+		if _, err := s.handler(requestCtx, "item/commandExecution/requestApproval", params); err != nil {
 			return runner.TurnResult{}, err
 		}
-		_, err := s.handler(ctx, "item/commandExecution/requestApproval", params)
+		_, err := s.handler(requestCtx, "item/commandExecution/requestApproval", params)
 		s.secondRequestAuto = err == nil
 		return runner.TurnResult{Text: "first"}, err
 	}
-	_, err := s.handler(ctx, "item/commandExecution/requestApproval", params)
+	_, err := s.handler(requestCtx, "item/commandExecution/requestApproval", params)
 	s.secondJobRequestErr = err
 	return runner.TurnResult{Text: "second"}, err
 }
@@ -274,6 +277,9 @@ func TestRunAllowsCommandForCurrentJobOnly(t *testing.T) {
 	}
 	if got := strings.Count(status.String(), "[承認待ち]"); got != 2 {
 		t.Fatalf("approval prompts = %d, want 2: %q", got, status.String())
+	}
+	if strings.Contains(status.String(), "ジョブを特定できない") {
+		t.Fatalf("job ID was not propagated to approval request: %q", status.String())
 	}
 }
 
