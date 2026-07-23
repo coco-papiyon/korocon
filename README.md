@@ -28,10 +28,17 @@ korocon config allow-path "~/.copilot/session-state/*/plan.md"
 Issue/PR一覧はAIを起動せず、次のサブコマンドで表示できます。工程状態は表示せず、GitHubから取得した情報のみを表示します。
 
 ```sh
+korocon issue list
+korocon pr list
+korocon issue list --state all --label backend
+korocon pr list --search 'is:open' --json
+```
+
+旧形式（互換別名）:
+
+```sh
 korocon list issue
 korocon list pr
-korocon list issue --state all --label backend
-korocon list pr --search 'is:open' --json
 ```
 
 `--state`は`open`（既定）、`closed`、`all`を指定できます。PRは`--state open`の場合Draftを除外します。`--label`、`--exclude-label`、`--title`、`--author`は複数指定でき、`--json`を指定するとJSON配列を出力します。

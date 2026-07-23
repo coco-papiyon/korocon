@@ -84,3 +84,121 @@ func TestRunListRejectsInvalidState(t *testing.T) {
 		t.Fatal("invalid state was accepted")
 	}
 }
+
+func TestRunIssueListAppliesOptionsAndFilters(t *testing.T) {
+	oldList := listIssuesWithOptions
+	t.Cleanup(func() { listIssuesWithOptions = oldList })
+	var gotDir string
+	var gotOptions issueworkflow.IssueListOptions
+	listIssuesWithOptions = func(_ context.Context, dir string, options issueworkflow.IssueListOptions) ([]issueworkflow.Issue, error) {
+		gotDir, gotOptions = dir, options
+		return []issueworkflow.Issue{
+			{Number: 3, Title: "API issue", State: "OPEN", Author: issueworkflow.User{Login: "carol"}, Labels: []issueworkflow.Label{{Name: "api"}}},
+			{Number: 1, Title: "UI issue", State: "OPEN", Author: issueworkflow.User{Login: "dave"}, Labels: []issueworkflow.Label{{Name: "ui"}}},
+		}, nil
+	}
+
+	var out bytes.Buffer
+	err := runIssue([]string{"list", "--state", "all", "--dir", "/myrepo", "--label", "api"}, &out, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotDir != "/myrepo" || gotOptions.State != "all" {
+		t.Fatalf("options = dir %q, %+v", gotDir, gotOptions)
+	}
+	if !strings.Contains(out.String(), "API issue") || strings.Contains(out.String(), "UI issue") {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestRunIssueListMatchesRunListIssue(t *testing.T) {
+	oldList := listIssuesWithOptions
+	t.Cleanup(func() { listIssuesWithOptions = oldList })
+	fixture := []issueworkflow.Issue{
+		{Number: 5, Title: "Shared issue", State: "OPEN", Author: issueworkflow.User{Login: "eve"}},
+	}
+	listIssuesWithOptions = func(_ context.Context, _ string, _ issueworkflow.IssueListOptions) ([]issueworkflow.Issue, error) {
+		return fixture, nil
+	}
+
+	var outNew, outOld bytes.Buffer
+	if err := runIssue([]string{"list", "--state", "open"}, &outNew, &outNew); err != nil {
+		t.Fatal(err)
+	}
+	if err := runList([]string{"issue", "--state", "open"}, &outOld, &outOld); err != nil {
+		t.Fatal(err)
+	}
+	if outNew.String() != outOld.String() {
+		t.Fatalf("output mismatch:\nnew: %q\nold: %q", outNew.String(), outOld.String())
+	}
+}
+
+func TestRunPRListMatchesRunListPR(t *testing.T) {
+	oldList := listPullRequestsWithOptions
+	t.Cleanup(func() { listPullRequestsWithOptions = oldList })
+	fixture := []prworkflow.PullRequest{
+		{Number: 7, Title: "Shared PR", State: "OPEN", IsDraft: false, Author: prworkflow.User{Login: "frank"}},
+	}
+	listPullRequestsWithOptions = func(_ context.Context, _ string, _ prworkflow.PullRequestListOptions) ([]prworkflow.PullRequest, error) {
+		return fixture, nil
+	}
+
+	var outNew, outOld bytes.Buffer
+	if err := runPR([]string{"list", "--state", "open"}, &outNew, &outNew); err != nil {
+		t.Fatal(err)
+	}
+	if err := runList([]string{"pr", "--state", "open"}, &outOld, &outOld); err != nil {
+		t.Fatal(err)
+	}
+	if outNew.String() != outOld.String() {
+		t.Fatalf("output mismatch:\nnew: %q\nold: %q", outNew.String(), outOld.String())
+	}
+}
+
+func TestRunIssueHelpPrintsUsage(t *testing.T) {
+	var out bytes.Buffer
+	if err := runIssue([]string{"--help"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "korocon issue list") {
+		t.Fatalf("help missing 'korocon issue list': %q", out.String())
+	}
+}
+
+func TestRunPRHelpPrintsUsage(t *testing.T) {
+	var out bytes.Buffer
+	if err := runPR([]string{"help"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "korocon pr list") {
+		t.Fatalf("help missing 'korocon pr list': %q", out.String())
+	}
+}
+
+func TestRunIssueUnknownVerbReturnsError(t *testing.T) {
+	var out bytes.Buffer
+	if err := runIssue([]string{"delete"}, &out, &out); err == nil {
+		t.Fatal("unknown verb was accepted")
+	}
+}
+
+func TestRunPRUnknownVerbReturnsError(t *testing.T) {
+	var out bytes.Buffer
+	if err := runPR([]string{"merge"}, &out, &out); err == nil {
+		t.Fatal("unknown verb was accepted")
+	}
+}
+
+func TestRunIssueNoArgsReturnsError(t *testing.T) {
+	var out bytes.Buffer
+	if err := runIssue([]string{}, &out, &out); err == nil {
+		t.Fatal("no args was accepted")
+	}
+}
+
+func TestRunPRNoArgsReturnsError(t *testing.T) {
+	var out bytes.Buffer
+	if err := runPR([]string{}, &out, &out); err == nil {
+		t.Fatal("no args was accepted")
+	}
+}
