@@ -74,6 +74,14 @@ func runList(args []string, stdout, stderr io.Writer) error {
 	}
 }
 
+// issueWorkflowState resolves the persisted workflow state for an issue.
+// Overridable for testing.
+var issueWorkflowState = issueworkflow.StateForIssue
+
+// prWorkflowState resolves the persisted workflow state for a pull request.
+// Overridable for testing.
+var prWorkflowState = prworkflow.StateForPullRequest
+
 func runIssueList(args []string, cmdName string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet(cmdName, flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -112,7 +120,7 @@ func runIssueList(args []string, cmdName string, stdout, stderr io.Writer) error
 	if *jsonOutput {
 		return writeListJSON(stdout, issues)
 	}
-	return writeIssueList(stdout, issues)
+	return writeIssueList(stdout, issues, *dir)
 }
 
 func runPRList(args []string, cmdName string, stdout, stderr io.Writer) error {
@@ -156,7 +164,7 @@ func runPRList(args []string, cmdName string, stdout, stderr io.Writer) error {
 	if *jsonOutput {
 		return writeListJSON(stdout, prs)
 	}
-	return writePullRequestList(stdout, prs)
+	return writePullRequestList(stdout, prs, *dir)
 }
 
 func filterListedIssues(issues []issueworkflow.Issue, filters githubSelectionFilters) []issueworkflow.Issue {
@@ -192,7 +200,7 @@ func writeListJSON(out io.Writer, value any) error {
 	return err
 }
 
-func writeIssueList(out io.Writer, issues []issueworkflow.Issue) error {
+func writeIssueList(out io.Writer, issues []issueworkflow.Issue, dir string) error {
 	if len(issues) == 0 {
 		_, err := fmt.Fprintln(out, "表示対象のIssueがありません")
 		return err
@@ -205,14 +213,18 @@ func writeIssueList(out io.Writer, issues []issueworkflow.Issue) error {
 		return err
 	}
 	for _, issue := range issues {
-		if _, err := fmt.Fprintf(table, "%d\t%s\t%s\t%s\t%s\t%s\n", issue.Number, displayValue(issue.State), tableCell(issue.Title), displayValue(issue.Author.Login), issueAssignees(issue.Assignees), displayValue(issue.URL)); err != nil {
+		state, err := issueWorkflowState(issue, dir)
+		if err != nil {
+			return fmt.Errorf("Issue #%dの工程状態の取得に失敗しました: %w", issue.Number, err)
+		}
+		if _, err := fmt.Fprintf(table, "%d\t%s\t%s\t%s\t%s\t%s\n", issue.Number, issueWorkflowDisplayName(state), tableCell(issue.Title), displayValue(issue.Author.Login), issueAssignees(issue.Assignees), displayValue(issue.URL)); err != nil {
 			return err
 		}
 	}
 	return table.Flush()
 }
 
-func writePullRequestList(out io.Writer, prs []prworkflow.PullRequest) error {
+func writePullRequestList(out io.Writer, prs []prworkflow.PullRequest, dir string) error {
 	if len(prs) == 0 {
 		_, err := fmt.Fprintln(out, "表示対象のPRがありません")
 		return err
@@ -225,11 +237,21 @@ func writePullRequestList(out io.Writer, prs []prworkflow.PullRequest) error {
 		return err
 	}
 	for _, pr := range prs {
+		var status string
+		if prworkflow.HasConflict(pr) {
+			status = "コンフリクト"
+		} else {
+			state, err := prWorkflowState(pr, dir)
+			if err != nil {
+				return fmt.Errorf("PR #%dの工程状態の取得に失敗しました: %w", pr.Number, err)
+			}
+			status = prWorkflowDisplayName(state)
+		}
 		branch := strings.TrimSpace(pr.HeadRefName)
 		if base := strings.TrimSpace(pr.BaseRefName); base != "" {
 			branch += " -> " + base
 		}
-		if _, err := fmt.Fprintf(table, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", pr.Number, displayValue(pr.State), yesNo(pr.IsDraft), displayValue(pr.ReviewDecision), tableCell(pr.Title), displayValue(pr.Author.Login), tableCell(branch), displayValue(pr.URL)); err != nil {
+		if _, err := fmt.Fprintf(table, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", pr.Number, status, yesNo(pr.IsDraft), displayValue(pr.ReviewDecision), tableCell(pr.Title), displayValue(pr.Author.Login), tableCell(branch), displayValue(pr.URL)); err != nil {
 			return err
 		}
 	}
@@ -310,4 +332,59 @@ Options:
   --title TEXT          require a title substring; repeatable (OR)
   --author USER         filter by author; repeatable (OR)
   --json                output JSON instead of a table`)
+}
+
+var issueStateDisplayNames = map[string]string{
+	"":                               "設計待ち",
+	"state:detected":                 "設計待ち",
+	"state:design_running":           "設計中",
+	"state:design_ready":             "設計完了・承認待ち",
+	"state:design_approved":          "実装待ち",
+	"state:implementation_running":   "実装中",
+	"state:implementation_ready":     "実装完了・承認待ち",
+	"state:implementation_approved":  "実装承認済み",
+	"state:pr_created":               "PR作成済み",
+	"state:design_failed":            "設計失敗・再実行待ち",
+	"state:implementation_failed":    "実装失敗・再実行待ち",
+	"state:failed":                   "失敗・再実行待ち",
+}
+
+func issueWorkflowDisplayName(state string) string {
+	if name, ok := issueStateDisplayNames[strings.ToLower(strings.TrimSpace(state))]; ok {
+		return name
+	}
+	return "不明な状態"
+}
+
+var prStateDisplayNames = map[string]string{
+	"":                                         "未レビュー",
+	"state:detected":                           "未レビュー",
+	"state:pr_created":                         "PR作成済み",
+	"state:pr_review_comment":                  "レビュー修正指示あり",
+	"state:pr_conflict":                        "コンフリクト",
+	"state:pr_conflict_running":                "コンフリクト解消中",
+	"state:pr_conflict_ready":                  "コンフリクト解消完了・承認待ち",
+	"state:pr_conflict_resolved":               "コンフリクト解消済み",
+	"state:pr_conflict_failed":                 "コンフリクト解消失敗・再実行待ち",
+	"state:review_fix_design_running":          "レビュー修正設計中",
+	"state:review_fix_design_ready":            "レビュー修正設計完了・承認待ち",
+	"state:review_fix_design_approved":         "レビュー修正設計承認済み",
+	"state:review_fix_implementation_running":  "レビュー修正実装中",
+	"state:review_fix_implementation_ready":    "レビュー修正実装完了・承認待ち",
+	"state:review_fix_implementation_approved": "レビュー修正実装承認済み",
+	"state:review_fixed":                       "レビュー修正済み",
+	"state:review_running":                     "レビュー中",
+	"state:review_ready":                       "レビュー完了・承認待ち",
+	"state:review_approved":                    "レビュー承認済み",
+	"state:review_failed":                      "レビュー失敗・再実行待ち",
+	"state:review_fix_failed":                  "レビュー修正失敗・再実行待ち",
+	"state:completed":                          "完了",
+	"state:failed":                             "失敗",
+}
+
+func prWorkflowDisplayName(state string) string {
+	if name, ok := prStateDisplayNames[strings.ToLower(strings.TrimSpace(state))]; ok {
+		return name
+	}
+	return "不明な状態"
 }

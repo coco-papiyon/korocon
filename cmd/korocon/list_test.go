@@ -12,7 +12,9 @@ import (
 
 func TestRunListIssueTableAppliesOptionsAndFilters(t *testing.T) {
 	oldList := listIssuesWithOptions
-	t.Cleanup(func() { listIssuesWithOptions = oldList })
+	oldState := issueWorkflowState
+	t.Cleanup(func() { listIssuesWithOptions = oldList; issueWorkflowState = oldState })
+	issueWorkflowState = func(_ issueworkflow.Issue, _ string) (string, error) { return "state:detected", nil }
 	var gotDir string
 	var gotOptions issueworkflow.IssueListOptions
 	listIssuesWithOptions = func(_ context.Context, dir string, options issueworkflow.IssueListOptions) ([]issueworkflow.Issue, error) {
@@ -61,7 +63,9 @@ func TestRunListPRJSONExcludesDraftByDefault(t *testing.T) {
 
 func TestRunListAllowsAllPRsIncludingDrafts(t *testing.T) {
 	oldList := listPullRequestsWithOptions
-	t.Cleanup(func() { listPullRequestsWithOptions = oldList })
+	oldState := prWorkflowState
+	t.Cleanup(func() { listPullRequestsWithOptions = oldList; prWorkflowState = oldState })
+	prWorkflowState = func(_ prworkflow.PullRequest, _ string) (string, error) { return "", nil }
 	listPullRequestsWithOptions = func(_ context.Context, _ string, options prworkflow.PullRequestListOptions) ([]prworkflow.PullRequest, error) {
 		if options.State != "all" {
 			t.Fatalf("options = %+v", options)
@@ -87,7 +91,9 @@ func TestRunListRejectsInvalidState(t *testing.T) {
 
 func TestRunIssueListAppliesOptionsAndFilters(t *testing.T) {
 	oldList := listIssuesWithOptions
-	t.Cleanup(func() { listIssuesWithOptions = oldList })
+	oldState := issueWorkflowState
+	t.Cleanup(func() { listIssuesWithOptions = oldList; issueWorkflowState = oldState })
+	issueWorkflowState = func(_ issueworkflow.Issue, _ string) (string, error) { return "state:detected", nil }
 	var gotDir string
 	var gotOptions issueworkflow.IssueListOptions
 	listIssuesWithOptions = func(_ context.Context, dir string, options issueworkflow.IssueListOptions) ([]issueworkflow.Issue, error) {
@@ -113,7 +119,9 @@ func TestRunIssueListAppliesOptionsAndFilters(t *testing.T) {
 
 func TestRunIssueListMatchesRunListIssue(t *testing.T) {
 	oldList := listIssuesWithOptions
-	t.Cleanup(func() { listIssuesWithOptions = oldList })
+	oldState := issueWorkflowState
+	t.Cleanup(func() { listIssuesWithOptions = oldList; issueWorkflowState = oldState })
+	issueWorkflowState = func(_ issueworkflow.Issue, _ string) (string, error) { return "state:detected", nil }
 	fixture := []issueworkflow.Issue{
 		{Number: 5, Title: "Shared issue", State: "OPEN", Author: issueworkflow.User{Login: "eve"}},
 	}
@@ -135,7 +143,9 @@ func TestRunIssueListMatchesRunListIssue(t *testing.T) {
 
 func TestRunPRListMatchesRunListPR(t *testing.T) {
 	oldList := listPullRequestsWithOptions
-	t.Cleanup(func() { listPullRequestsWithOptions = oldList })
+	oldState := prWorkflowState
+	t.Cleanup(func() { listPullRequestsWithOptions = oldList; prWorkflowState = oldState })
+	prWorkflowState = func(_ prworkflow.PullRequest, _ string) (string, error) { return "", nil }
 	fixture := []prworkflow.PullRequest{
 		{Number: 7, Title: "Shared PR", State: "OPEN", IsDraft: false, Author: prworkflow.User{Login: "frank"}},
 	}
@@ -200,5 +210,224 @@ func TestRunPRNoArgsReturnsError(t *testing.T) {
 	var out bytes.Buffer
 	if err := runPR([]string{}, &out, &out); err == nil {
 		t.Fatal("no args was accepted")
+	}
+}
+
+func TestWriteIssueListShowsWorkflowState(t *testing.T) {
+	old := issueWorkflowState
+	t.Cleanup(func() { issueWorkflowState = old })
+	issueWorkflowState = func(issue issueworkflow.Issue, _ string) (string, error) {
+		states := map[int]string{1: "state:design_running", 2: "state:detected"}
+		return states[issue.Number], nil
+	}
+	var out bytes.Buffer
+	issues := []issueworkflow.Issue{
+		{Number: 1, Title: "Design issue"},
+		{Number: 2, Title: "New issue"},
+	}
+	if err := writeIssueList(&out, issues, "."); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "設計中") || !strings.Contains(out.String(), "設計待ち") {
+		t.Fatalf("output = %q", out.String())
+	}
+	if strings.Contains(out.String(), "OPEN") || strings.Contains(out.String(), "state:") {
+		t.Fatalf("raw state leaked into output: %q", out.String())
+	}
+}
+
+func TestWritePullRequestListShowsWorkflowState(t *testing.T) {
+	old := prWorkflowState
+	t.Cleanup(func() { prWorkflowState = old })
+	prWorkflowState = func(pr prworkflow.PullRequest, _ string) (string, error) {
+		states := map[int]string{1: "state:review_running", 2: ""}
+		return states[pr.Number], nil
+	}
+	var out bytes.Buffer
+	prs := []prworkflow.PullRequest{
+		{Number: 1, Title: "Reviewing PR", State: "OPEN"},
+		{Number: 2, Title: "New PR", State: "OPEN"},
+	}
+	if err := writePullRequestList(&out, prs, "."); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "レビュー中") || !strings.Contains(out.String(), "未レビュー") {
+		t.Fatalf("output = %q", out.String())
+	}
+	if strings.Contains(out.String(), "OPEN") || strings.Contains(out.String(), "state:") {
+		t.Fatalf("raw state leaked into output: %q", out.String())
+	}
+}
+
+func TestWritePullRequestListConflictOverridesState(t *testing.T) {
+	old := prWorkflowState
+	t.Cleanup(func() { prWorkflowState = old })
+	prWorkflowState = func(pr prworkflow.PullRequest, _ string) (string, error) {
+		return "state:review_running", nil
+	}
+	var out bytes.Buffer
+	prs := []prworkflow.PullRequest{
+		{Number: 1, Title: "Conflict PR", State: "OPEN", Mergeable: "CONFLICTING"},
+	}
+	if err := writePullRequestList(&out, prs, "."); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "コンフリクト") {
+		t.Fatalf("conflict was not shown: %q", out.String())
+	}
+	if strings.Contains(out.String(), "レビュー中") {
+		t.Fatalf("DB state overrode conflict: %q", out.String())
+	}
+}
+
+func TestWriteIssueListPropagatesStateError(t *testing.T) {
+	old := issueWorkflowState
+	t.Cleanup(func() { issueWorkflowState = old })
+	issueWorkflowState = func(_ issueworkflow.Issue, _ string) (string, error) {
+		return "", bytes.ErrTooLarge
+	}
+	var out bytes.Buffer
+	issues := []issueworkflow.Issue{{Number: 1, Title: "Broken"}}
+	if err := writeIssueList(&out, issues, "."); err == nil {
+		t.Fatal("expected error from state lookup failure")
+	}
+}
+
+func TestWritePullRequestListPropagatesStateError(t *testing.T) {
+	old := prWorkflowState
+	t.Cleanup(func() { prWorkflowState = old })
+	prWorkflowState = func(_ prworkflow.PullRequest, _ string) (string, error) {
+		return "", bytes.ErrTooLarge
+	}
+	var out bytes.Buffer
+	prs := []prworkflow.PullRequest{{Number: 1, Title: "Broken", State: "OPEN"}}
+	if err := writePullRequestList(&out, prs, "."); err == nil {
+		t.Fatal("expected error from state lookup failure")
+	}
+}
+
+func TestIssueWorkflowDisplayNameMapsAllExpectedStates(t *testing.T) {
+	cases := []struct {
+		state string
+		want  string
+	}{
+		{"state:detected", "設計待ち"},
+		{"", "設計待ち"},
+		{"state:design_running", "設計中"},
+		{"state:design_ready", "設計完了・承認待ち"},
+		{"state:design_approved", "実装待ち"},
+		{"state:implementation_running", "実装中"},
+		{"state:implementation_ready", "実装完了・承認待ち"},
+		{"state:pr_created", "PR作成済み"},
+		{"state:design_failed", "設計失敗・再実行待ち"},
+		{"state:implementation_failed", "実装失敗・再実行待ち"},
+		{"state:failed", "失敗・再実行待ち"},
+		{"state:unknown_future_state", "不明な状態"},
+	}
+	for _, c := range cases {
+		if got := issueWorkflowDisplayName(c.state); got != c.want {
+			t.Errorf("issueWorkflowDisplayName(%q) = %q, want %q", c.state, got, c.want)
+		}
+	}
+}
+
+func TestPRWorkflowDisplayNameMapsAllExpectedStates(t *testing.T) {
+	cases := []struct {
+		state string
+		want  string
+	}{
+		{"state:detected", "未レビュー"},
+		{"", "未レビュー"},
+		{"state:review_running", "レビュー中"},
+		{"state:review_ready", "レビュー完了・承認待ち"},
+		{"state:review_approved", "レビュー承認済み"},
+		{"state:pr_review_comment", "レビュー修正指示あり"},
+		{"state:review_fix_implementation_running", "レビュー修正実装中"},
+		{"state:pr_conflict", "コンフリクト"},
+		{"state:pr_conflict_running", "コンフリクト解消中"},
+		{"state:pr_conflict_ready", "コンフリクト解消完了・承認待ち"},
+		{"state:review_failed", "レビュー失敗・再実行待ち"},
+		{"state:completed", "完了"},
+		{"state:failed", "失敗"},
+		{"state:unknown_future_state", "不明な状態"},
+	}
+	for _, c := range cases {
+		if got := prWorkflowDisplayName(c.state); got != c.want {
+			t.Errorf("prWorkflowDisplayName(%q) = %q, want %q", c.state, got, c.want)
+		}
+	}
+}
+
+func TestRunIssueListShowsWorkflowStateNotGitHubState(t *testing.T) {
+	oldList := listIssuesWithOptions
+	oldState := issueWorkflowState
+	t.Cleanup(func() {
+		listIssuesWithOptions = oldList
+		issueWorkflowState = oldState
+	})
+	listIssuesWithOptions = func(_ context.Context, _ string, _ issueworkflow.IssueListOptions) ([]issueworkflow.Issue, error) {
+		return []issueworkflow.Issue{
+			{Number: 26, Title: "fix status", State: "OPEN"},
+		}, nil
+	}
+	issueWorkflowState = func(_ issueworkflow.Issue, _ string) (string, error) {
+		return "state:design_running", nil
+	}
+
+	var out bytes.Buffer
+	if err := runIssue([]string{"list"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "設計中") {
+		t.Fatalf("workflow state not shown, output = %q", out.String())
+	}
+	if strings.Contains(out.String(), "OPEN") {
+		t.Fatalf("GitHub state leaked into output: %q", out.String())
+	}
+}
+
+func TestRunPRListShowsWorkflowStateNotGitHubState(t *testing.T) {
+	oldList := listPullRequestsWithOptions
+	oldState := prWorkflowState
+	t.Cleanup(func() {
+		listPullRequestsWithOptions = oldList
+		prWorkflowState = oldState
+	})
+	listPullRequestsWithOptions = func(_ context.Context, _ string, _ prworkflow.PullRequestListOptions) ([]prworkflow.PullRequest, error) {
+		return []prworkflow.PullRequest{
+			{Number: 42, Title: "review PR", State: "OPEN"},
+		}, nil
+	}
+	prWorkflowState = func(_ prworkflow.PullRequest, _ string) (string, error) {
+		return "state:review_running", nil
+	}
+
+	var out bytes.Buffer
+	if err := runPR([]string{"list"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "レビュー中") {
+		t.Fatalf("workflow state not shown, output = %q", out.String())
+	}
+	if strings.Contains(out.String(), "OPEN") {
+		t.Fatalf("GitHub state leaked into output: %q", out.String())
+	}
+}
+
+func TestRunIssueListJSONPreservesGitHubState(t *testing.T) {
+	oldList := listIssuesWithOptions
+	t.Cleanup(func() { listIssuesWithOptions = oldList })
+	listIssuesWithOptions = func(_ context.Context, _ string, _ issueworkflow.IssueListOptions) ([]issueworkflow.Issue, error) {
+		return []issueworkflow.Issue{
+			{Number: 1, Title: "issue", State: "OPEN"},
+		}, nil
+	}
+
+	var out bytes.Buffer
+	if err := runIssue([]string{"list", "--json"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"state": "OPEN"`) {
+		t.Fatalf("JSON state not preserved, output = %q", out.String())
 	}
 }
