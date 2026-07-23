@@ -21,7 +21,7 @@ go build -o ./korocon ./cmd/korocon
 ./korocon doctor
 ```
 
-実行バイナリと同じディレクトリに`config.json`を配置します。
+ツールディレクトリに`config.json`を配置します。ビルド済みバイナリでは実行バイナリと同じディレクトリ、`go run`ではカレントディレクトリがツールディレクトリです。
 
 手動作成の代わりに`korocon config init`で対話初期化できます。`baseBranch`、`branchNamePattern`、`startupCommand`を入力した後、役割別のProviderとModelを設定します。モデル設定だけを変更する場合は`korocon config model`を使用します。
 

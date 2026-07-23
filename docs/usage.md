@@ -17,7 +17,7 @@ go build -o ./korocon ./cmd/korocon
 
 ### 設定ファイル
 
-`korocon`は実行バイナリと同じディレクトリにある`config.json`を読み込みます。ファイルが存在しない場合は既定値を使用します。`go run`では一時ディレクトリに実行バイナリが作られるため、設定ファイルを利用するときはビルドしたバイナリを起動してください。
+`korocon`はツールディレクトリにある`config.json`を読み込みます。ビルド済みバイナリでは実行バイナリと同じディレクトリ、`go run`ではカレントディレクトリがツールディレクトリです。ファイルが存在しない場合は既定値を使用します。状態DBの`korocon.db`も同じ規則で配置されます。
 
 設定ファイルは`korocon config init`で対話作成できます。`baseBranch`、`branchNamePattern`、`startupCommand`の順に入力し、未入力状態でEnterを押すと画面に表示された既定値を使用します。その後、`korocon config model`と同じモデル設定へ進み、実装者・検証者・レビューアのProviderとModelを入力します。Model候補は選択したProviderごとに表示します。Copilotでは`auto`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5-mini`、`claude-sonnet-4.6`、`claude-opus-4.6`を選択でき、既定値は`auto`です。検証者とレビューアは`inherit`で実装者と同じ設定にできます。
 

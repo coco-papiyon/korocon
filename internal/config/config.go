@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/coco-papiyon/korocon/internal/appdir"
 )
 
 const FileName = "config.json"
@@ -75,8 +77,8 @@ func DefaultAllowedPaths() []string {
 	return append([]string(nil), defaultAllowedPaths...)
 }
 
-// Load reads config.json from the directory containing the korocon binary.
-// A missing file uses defaults so installed binaries remain self-contained.
+// Load reads config.json from the tool directory. A missing file uses defaults
+// so installed binaries remain self-contained.
 func Load() (Config, string, error) {
 	path, err := Path()
 	if err != nil {
@@ -86,13 +88,13 @@ func Load() (Config, string, error) {
 	return configured, path, err
 }
 
-// Path returns the config file beside the korocon executable.
+// Path returns the config file in the tool directory.
 func Path() (string, error) {
-	executable, err := os.Executable()
+	directory, err := appdir.Path()
 	if err != nil {
-		return "", fmt.Errorf("resolve executable path: %w", err)
+		return "", err
 	}
-	return filepath.Join(filepath.Dir(executable), FileName), nil
+	return filepath.Join(directory, FileName), nil
 }
 
 func Save(path string, configured Config) error {
